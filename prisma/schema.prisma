@@ -1,0 +1,185 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ALBRA PLATFORM — LOCAL REGISTRY & PLATFORM STATE
+// ─────────────────────────────────────────────────────────────
+
+model InstalledProduct {
+  id            String    @id @default(cuid())
+  productId     String    @unique
+  displayName   String
+  vendor        String
+  version       String
+  channel       String    @default("stable")
+  state         String    @default("INSTALLED") // LifecycleState
+  health        String    @default("UNKNOWN") // HealthStatus
+  port          Int?
+  runtimeHandle String?
+  installPath   String?
+  dataPath      String?
+  packageHash   String?
+  entitlement   String?
+  installedAt   DateTime?
+  startedAt     DateTime?
+  stoppedAt     DateTime?
+  lastHealthAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model PackageArtifact {
+  id          String   @id @default(cuid())
+  packageId   String
+  version     String
+  channel     String   @default("stable")
+  fileName    String
+  sha256      String
+  signature   String
+  verified    Boolean  @default(false)
+  manifest    Json
+  createdAt   DateTime @default(now())
+
+  @@unique([packageId, version])
+}
+
+model LifecycleRun {
+  id         String    @id @default(cuid())
+  productId  String?
+  operation  String // INSTALL | START | STOP | RESTART | UPDATE | ROLLBACK | REPAIR | BACKUP | RESTORE | UNINSTALL | CERTIFICATION | CLEANROOM
+  status     String    @default("RUNNING") // RUNNING | SUCCESS | WARNING | FAILURE | ROLLED_BACK
+  steps      Json
+  result     Json?
+  error      String?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  type      String // INSTALL_STARTED, INSTALL_COMPLETED, ...
+  productId String?
+  actor     String   @default("platform")
+  severity  String   @default("INFO") // INFO | WARN | ERROR
+  detail    Json?
+  createdAt DateTime @default(now())
+}
+
+model LogEntry {
+  id        String   @id @default(cuid())
+  level     String   @default("info") // debug | info | warn | error
+  channel   String   @default("SYSTEM") // USER | SYSTEM | DEBUG | AUDIT
+  productId String?
+  message   String
+  data      Json?
+  createdAt DateTime @default(now())
+}
+
+model HealthSnapshot {
+  id        String   @id @default(cuid())
+  productId String
+  overall   String // HEALTHY | DEGRADED | FAILED | UNKNOWN
+  checks    Json
+  createdAt DateTime @default(now())
+}
+
+model BackupRecord {
+  id        String   @id @default(cuid())
+  productId String
+  kind      String // PRE_UPDATE | MANUAL | PRE_UNINSTALL
+  version   String
+  note      String?
+  sizeBytes Int      @default(0)
+  payload   Json?
+  filePath  String?
+  createdAt DateTime @default(now())
+}
+
+model DiagnosticBundleRec {
+  id        String   @id @default(cuid())
+  productId String
+  summary   Json
+  findings  Json
+  createdAt DateTime @default(now())
+}
+
+model SecretRecord {
+  id        String   @id @default(cuid())
+  key       String
+  productId String?
+  cipher    String
+  hint      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([key, productId])
+}
+
+model ConfigRecord {
+  id        String   @id @default(cuid())
+  productId String
+  scope     String // USER | SYSTEM | PRODUCT
+  values    Json
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, scope])
+}
+
+model ProviderRecord {
+  id         String   @id @default(cuid())
+  providerId String
+  productId  String?
+  status     String   @default("DISCOVERED") // ProviderStatus
+  meta       Json?
+  updatedAt  DateTime @updatedAt
+
+  @@unique([providerId, productId])
+}
+
+model PlatformState {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────
+// PILOT PRODUCTS — ISOLATED PRODUCT DATA (per-product tables)
+// ─────────────────────────────────────────────────────────────
+
+model CrmContact {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  company   String?
+  tags      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CrmDeal {
+  id        String   @id @default(cuid())
+  title     String
+  contactId String?
+  value     Float    @default(0)
+  stage     String   @default("NUEVO") // NUEVO | CONTACTADO | PROPUESTA | GANADO | PERDIDO
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model LeadRecord {
+  id        String   @id @default(cuid())
+  name      String
+  company   String?
+  source    String   @default("WEB")
+  status    String   @default("NUEVO") // NUEVO | CALIFICADO | CONTACTADO | DESCARTADO
+  score     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

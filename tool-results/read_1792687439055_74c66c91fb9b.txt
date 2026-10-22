@@ -1,0 +1,160 @@
+     1→# ALBRA WORKLOG
+     2→
+     3→---
+     4→Task ID: 1
+     5→Agent: main (architect)
+     6→Task: WAVE 0 — Repository & environment audit
+     7→
+     8→Work Log:
+     9→- Inspected repo: Next.js 16.1.3 App Router + React 19 + TypeScript 5 + Bun runtime.
+    10→- Styling: Tailwind CSS 4, full shadcn/ui set in src/components/ui, Lucide icons, sonner toasts.
+    11→- DB: Prisma 6 + SQLite at db/custom.db (schema has demo User/Post models — will be replaced).
+    12→- zod 4, zustand, TanStack Query available. No CI, no test suite. page.tsx is a Z.ai placeholder.
+    13→- Dev server already running on port 3000 (dev.log confirmed).
+    14→- Environment is a Linux sandbox: Windows-native .exe cannot be compiled here. Decision: build ALBRA Platform core fully adapter-driven; implement real LocalDeploymentAdapter (sandbox fs/ports/secrets/packages) and specify Windows Local Adapter + SelfHosted adapter as adapter implementations (documented, non-blocking).
+    15→
+    16→Stage Summary:
+    17→- Stack fixed: Next.js 16 + TS + Prisma/SQLite + shadcn/ui. No blockers. Proceeding to WAVE 1 (Contracts), WAVE 2 (Package), WAVE 3 (Core), WAVE 4 (Installer), WAVE 5 (Launcher UI), WAVE 6 (Health/Diagnostics), WAVE 7 (Update/Rollback), WAVE 8 (Pilot: CRM + LEADS for isolation proof), WAVE 9 (Clean-room), WAVE 10 (Certification), LIPO + docs.
+    18→- Pilot selection (PILOT READINESS AUDIT): CRM scored highest (clear domain, simple schema, DB/health/config readiness, easy clean-room). LEADS added as second installable product to prove product isolation. KREA/TRADING locked by entitlement (future SaaS concept).
+    19→
+    20→---
+    21→Task ID: 12-a
+    22→Agent: docs-agent
+    23→Task: Documentación + reports-content
+    24→
+    25→Work Log:
+    26→- Leí worklog.md (contexto Task 1) y el código real de ALBRA: contracts/index.ts, package/format.ts, products/catalog.ts, core/{installer,updater,uninstaller,health,runtime,secrets,runs,audit,logger,registry,package-keys}.ts, adapters/index.ts, env.ts, products/{data,migrations}.ts y prisma/schema.prisma. Sin inventar componentes: todo lo documentado proviene del código leído.
+    27→- Nota observada (sin modificar nada): core/backup.ts aún no existe en disco aunque updater.ts/uninstaller.ts lo importan (createBackup/deleteBackupsFor); la doc de backup se basa en el modelo BackupRecord (kinds PRE_UPDATE/MANUAL/PRE_UNINSTALL) y su uso real en updater/uninstaller/products/data.ts. La UI, /api/reports, certification runner y clean-room están en construcción por el agente principal; se documentaron según su especificación en código (LifecycleRun.operation CERTIFICATION|CLEANROOM, audit types, InjectFailure, awaitRun) dejando claro su estado.
+    28→- Creé docs/ con 8 documentos en español (60-150 líneas c/u): ARCHITECTURE.md (7 capas, diagrama ASCII, adapter-driven, aislamiento), CONTRACTS.md (los 10+ contratos con campos reales Zod), PACKAGE-FORMAT.md (ALBRA-PACKAGE 1.0.0, cadena PACKAGE→HASH→SIGNATURE→VERIFY→INSTALL, tabla de códigos de rechazo, tampered), INSTALLER.md (15 estados, transacción PREPARE/STAGE/COMMIT/ROLLBACK, preflight, puertos), LIFECYCLE.md (estados, health engine, diagnostics, update/rollback, uninstall KEEP/EXPORT/DELETE, backup), SECURITY.md (HMAC-SHA256, AES-256-GCM, redaction, locks, auditoría), TESTING-CERTIFICATION.md (runner en vivo, clean-room, inyección de fallos), NEXT-WAVE-VPS-SAAS.md (SelfHostedDeploymentAdapter, conceptos SaaS reservados, WAVE 11-12).
+    29→- Creé src/lib/albra/reports-content.ts con la interfaz exacta (ReportSection/ReportDoc/REPORTS) y los 10 reportes con ids exactos: architecture, contracts, package, installer, lifecycle, security, test-report (suite en vivo), cleanroom, lipo (KEEP/REFACTOR/MOVE/SKILL/TOOL/PROVIDER/AUXILIARY/DELETE), next-wave. 4 secciones sustanciales por reporte, español profesional.
+    30→- Verifiqué: 8 docs entre 74-110 líneas, 10 ids presentes en REPORTS, ningún archivo existente modificado, sin ejecutar bun/build/lint.
+    31→
+    32→Stage Summary:
+    33→- docs/ARCHITECTURE.md, docs/CONTRACTS.md, docs/PACKAGE-FORMAT.md, docs/INSTALLER.md, docs/LIFECYCLE.md, docs/SECURITY.md, docs/TESTING-CERTIFICATION.md, docs/NEXT-WAVE-VPS-SAAS.md (nuevos).
+    34→- src/lib/albra/reports-content.ts (nuevo; consumible por /api/reports y el diálogo de Reportes).
+    35→- worklog.md: registro 12-a añadido al final (append).
+    36→---
+    37→Task ID: 9-c
+    38→Agent: product-panes-agent
+    39→Task: Panes de producto CRM y LEADS
+    40→
+    41→Work Log:
+    42→- Leí worklog.md, api-types.ts (CrmContactDTO/CrmDealDTO/LeadDTO), use-albra.ts (api/ApiError/fmtDate) y los componentes ui/ existentes (dialog, badge, button, card, input, label, select, table, skeleton). No existe componente "empty" en ui/, así que los estados vacíos se construyeron inline (div/fila de tabla colSpan) — sin inventar componentes.
+    43→- Creé src/components/crm/crm-pane.tsx ("use client"): export function CrmPane({ productId, running, version }). Compuerta (Card zinc-900 centrada + icono Users, "ALBRA CRM está detenido", sin interacción) cuando running=false o cuando api lanza ApiError 503 (SERVICE_STOPPED) durante carga o mutación. Con running: Promise.all de GET /crm/contacts y GET /crm/deals, Skeleton durante carga inicial. Layout grid grid-cols-1 lg:grid-cols-5 gap-4: Contactos (col-span-3, tabla max-h-80 overflow-y-auto, contador, dialog nuevo contacto con nombre required + empresa/email/teléfono, y campo "Etiquetas (separadas por coma)" SOLO si version >= 1.1.0 — comparación semver local compareSemver — con Badge "Nuevo en 1.1.0"; tags renderizadas como Badges zinc) + Pipeline (col-span-2, kanban grid grid-cols-1 md:grid-cols-5 gap-3 con NUEVO/CONTACTADO/PROPUESTA/GANADO/PERDIDO, header text-xs uppercase tracking-wide zinc-500 + contador, cards con title font-medium, valor Intl.NumberFormat("es-CO", currency COP, maximumFractionDigits 0), Select pequeño para mover etapa → PATCH /crm/deals/{id} {stage}, Trash2 → DELETE; GANADO borde emerald-500/60, PERDIDO opacity-60; max-h-96 overflow-y-auto global). POST /crm/contacts y /crm/deals para creación. Eliminaciones con aria-label "Eliminar contacto" / "Eliminar oportunidad", busyId para deshabilitar, toast de éxito/error y recarga.
+    44→- Creé src/components/leads/leads-pane.tsx ("use client"): export function LeadsPane({ productId, running }). Misma compuerta (icono Target, "ALBRA Agente Leads está detenido"). GET /api/products/{productId}/leads → { leads }. Card "Leads" con contador + dialog [Nuevo lead] (nombre required, empresa, origen Select WEB/REFERRAL/ADS/MANUAL con labels es). Tabla max-h-96 overflow-y-auto: nombre font-medium, empresa, origen Badge zinc, estado Select inline (NUEVO/CALIFICADO/CONTACTADO/DESCARTADO → PATCH /leads/{id} {status}), score como Badge (>=70 emerald "Caliente", >=40 amber "Tibio", <40 zinc "Frío", muestra el número), Trash2 eliminar (aria-label "Eliminar lead").
+    45→- Decisiones: paleta estricta zinc-950/900/800 + acento emerald-500 (bg-emerald-500 hover:bg-emerald-400 text-zinc-950 en botones primarios; nunca azul/indigo/violeta); rounded-xl p-4 gap-4 (overrides px-4/py-4 sobre Card/CardHeader/CardContent); helper handleMutationError: 503 → setStopped(true) + toast.error(userMessage) + cierre de diálogos vía effect (muestra compuerta); errores no-503 → toast con userMessage ?? message; texto español; tipado estricto sin any (DealStage/LeadStatus/LeadSource derivados de los DTO, Records tipados para labels, payloads con interfaces locales); hovers con transition-colors; estados vacíos "Sin contactos todavía — crea el primero" / "Sin oportunidades todavía — crea la primera" / "Sin leads todavía — crea el primero".
+    46→- Verificación: tsc --noEmit del proyecto — 0 errores en los dos archivos nuevos (los errores reportados pertenecen a módulos preexistentes de otras tareas, no tocados). No se ejecutó dev/build/lint. Ningún archivo existente fue modificado.
+    47→
+    48→Stage Summary:
+    49→- src/components/crm/crm-pane.tsx (nuevo): CrmPane({ productId, running, version }) — compuerta/503, contactos con tags gating por versión >= 1.1.0, kanban de 5 etapas con COP es-CO, CRUD completo con toasts sonner.
+    50→- src/components/leads/leads-pane.tsx (nuevo): LeadsPane({ productId, running }) — compuerta/503, tabla de leads con origen, estado inline PATCH y score Caliente/Tibio/Frío, creación y eliminación con toasts.
+    51→- Listos para montarse en el workspace de producto (gating con running lo hace el workspace).
+    52→---
+    53→Task ID: 9-a
+    54→Agent: launcher-ui-agent
+    55→Task: Componentes UI del Launcher
+    56→
+    57→Work Log:
+    58→- Leí worklog.md (Task 1 y 12-a), src/lib/albra/api-types.ts y src/hooks/use-albra.ts antes de escribir; verifiqué APIs reales de ui/{badge,button,dialog,alert-dialog,select,table}.
+    59→- Creé 12 archivos nuevos en src/components/albra/ (ningún archivo existente modificado, sin páginas, sin dev/build/lint):
+    60→  - status-badge.tsx: StatusBadge con mapeo español de estados, dot por estado (RUNNING emerald-500 pulse; en curso amber-400; DEGRADED amber-500; FAILED red-500; STOPPED/INSTALLED zinc-400), health==="FAILED" override a "Error", compact opcional, Badge outline.
+    61→  - product-card.tsx: ProductCard con icono por nombre (Users/Target/Sparkles/LineChart, fallback Package) en rounded-lg bg-zinc-800, "ALBRA · categoría", chips puerto (font-mono), ALBRA CERTIFIED (BadgeCheck, emerald), actualización clicable amber "v{latestVersion} disponible" (onUpdate), "No adquirido" (Lock, sin emoji); acciones: locked→VER PRODUCTO; busy→spinner "Trabajando…"; AVAILABLE→INSTALAR emerald; RUNNING→ABRIR emerald + DETENER outline; resto→ABRIR outline + INICIAR emerald; estados en curso→spinner.
+    62→  - run-steps.tsx: RunSteps lista vertical con iconos por status (PENDING Circle zinc-700, RUNNING Loader2 amber spin, SUCCESS CheckCircle2 emerald, WARNING AlertTriangle amber, FAILURE XCircle red, SKIPPED MinusCircle zinc-600), detail font-mono text-xs zinc-500, durationMs en ms, pie "Ejecutando…" pulse si running.
+    63→  - install-wizard.tsx: InstallWizard (Dialog sm:max-w-lg) con fases preflight→confirm→running→done; preflight POST /api/preflight {packageId} al abrir (useEffect por productId), issues BLOCKER/WARNING/RESOLVED con iconos, platform info (adapterLabel, freeDiskMB, puerto); !ok → "No se puede instalar" + cerrar; confirm con resumen producto/versión/puerto + INSTALAR emerald → POST /api/install {packageId} → useRunPolling(runId) → RunSteps; done: SUCCESS → CheckCircle2 emerald "Instalación completada" + ABRIR PRODUCTO (onInstalled + cierra); FAILURE/ROLLED_BACK → error + detail técnico + cerrar; ApiError → toast.error(e.userMessage ?? e.message). Respuesta de /api/install leída de forma tolerante (runId ?? id ?? run.id).
+    64→  - activity-feed.tsx: ActivityFeed card "Actividad reciente": runs (operación en español + productId font-mono + Badge status con estilo por RunStatus + tiempo relativo "hace X" con title=fmtDate) y auditoría (dot severity + type font-mono + productId); loading con Skeleton; max-h-80 overflow-y-auto.
+    65→  - system-dialog.tsx: SystemDialog fetch GET /api/system al abrir; grid 2-3 col con adaptador, plataforma, arch, node, memoria, disco libre, productos instalados, paquetes en bóveda, uptime y albraHome (font-mono text-xs, col-span full); footer "ALBRA Platform v{version} — {adapterLabel}".
+    66→  - vault-dialog.tsx: VaultDialog (Dialog max-w-3xl) fetch GET /api/packages; Table con fileName font-mono, versión, canal, fmtBytes, verificación (verified→Badge emerald "Firma válida"; tampered→Badge red "Manipulado"; si no→reason); botón Verificar por fila → POST /api/packages/verify {fileName} → toast + refresh; nota "Los paquetes con firma inválida son rechazados por el instalador."; max-h-96 overflow-y-auto.
+    67→  - audit-dialog.tsx: AuditDialog fetch GET /api/audit?limit=100; Select filtro (todos/install/update/repair/uninstall/certification, match case-insensitive); filas severity dot + type font-mono + productId + fmtDate + detail JSON plegable (<pre> text-xs) con chevron aria-label.
+    68→  - certification-dialog.tsx: CertificationDialog fetch fetchCertification("crm") al abrir; resultado previo (Badge "ALBRA CERTIFIED"/"NO CERTIFICADO" + pasos PASS/FAIL/SKIP con iconos, detail, durationMs); [Ejecutar certificación] → POST /api/certification {productId:"crm"} → useRunPolling(runId) mapeando run.steps a vista tipo CertificationStepDTO (RUNNING/PENDING representados con flag live, sin alterar DTOs); al terminar onFinished() + toast; advertencia del ciclo completo 2-3 min.
+    69→  - cleanroom-dialog.tsx: CleanroomDialog (AlertDialog) explicando qué borra y qué conserva; Input para "RESETEAR" que habilita el botón rojo [Restaurar máquina limpia] → POST /api/cleanroom → toast + onDone() + cerrar; spinner amber-400 mientras.
+    70→  - reports-dialog.tsx: ReportsDialog fetch GET /api/reports → { reports }; layout grid grid-cols-1 sm:grid-cols-[240px_1fr]; izquierda nav de títulos, derecha title/summary/sections (h3 + body whitespace-pre-wrap); max-h-[70vh] overflow-y-auto en ambas columnas.
+    71→  - locked-product-dialog.tsx: LockedProductDialog con icono del catálogo, nombre, descripción, Badge "Requiere: {requiredEntitlement}" (Lock) y texto exacto de la cadena SaaS CUSTOMER → SUBSCRIPTION → ENTITLEMENT → PRODUCT ACCESS.
+    72→- Decisiones: tema oscuro estricto (zinc-950/900/800, texto zinc-100/400, acento solo emerald, estados amber/red), todo "use client", TypeScript estricto sin any (DTOs importados de @/lib/albra/api-types, tipos de respuesta tolerantes runId|id|run.id y verified|ok sin modificar contratos), toast via sonner, iconos lucide con aria-hidden, botones icónicos con aria-label, responsive grid-cols-1→sm:grid-cols-2/3.
+    73→- Verificación: `tsc --noEmit` filtrado — 0 errores en los 12 archivos de esta tarea (existe 1 error en components/albra/workspace/diagnostics-panel.tsx de otro agente, no modificado).
+    74→
+    75→Stage Summary:
+    76→- src/components/albra/{status-badge,product-card,run-steps,install-wizard,activity-feed,system-dialog,vault-dialog,audit-dialog,certification-dialog,cleanroom-dialog,reports-dialog,locked-product-dialog}.tsx (nuevos, 12 archivos).
+    77→- Listos para el Launcher del agente principal: expects /api/{catalog,preflight,install,install,runs,system,packages,packages/verify,audit,certification,cleanroom,reports} y hooks de src/hooks/use-albra.ts; Toaster de sonner lo integra el agente principal.
+    78→---
+    79→Task ID: 9-b
+    80→Agent: workspace-ui-agent
+    81→Task: Workspace de producto con pestañas de ciclo de vida
+    82→
+    83→Work Log:
+    84→- Leí worklog.md, src/lib/albra/api-types.ts, src/hooks/use-albra.ts y las APIs reales de shadcn/ui (alert-dialog, accordion, dropdown-menu, radio-group, alert, select, tabs, dialog). Verifiqué formato de LogEntry en core/logger.ts (level/channel/message/data) y shape de DiagnosticsDTO en core/diagnostics.ts antes de escribir.
+    85→- Creé 9 archivos nuevos SOLO en src/components/albra/workspace/ (ningún archivo existente modificado, sin páginas, sin dev/build/lint):
+    86→  - health-checks.tsx: HealthChecks — badge overall (HEALTHY emerald/DEGRADED amber/FAILED red/UNKNOWN zinc), grid sm:grid-cols-2 con icono por status (PASS/WARN/FAIL/SKIP), chip target, marca "crítico", botón Verificar ahora con RefreshCw girando si refreshing.
+    87→  - update-panel.tsx: UpdatePanel — chip grande de versión actual, lista detail.updates con "incluye migración de datos", Select de destino, Switch "Inyección de fallo" + Select MIGRATION/START, POST /update → useRunPolling → RunSteps; SUCCESS toast + onDone(), ROLLED_BACK Alert amber, FAILURE Alert red; sección Rollback (si detail.rollbackAvailable) con POST /rollback y mismo polling; nota del flujo CHECK→…→COMMIT.
+    88→  - backups-panel.tsx: BackupsPanel — lista detail.backups (etiquetas PRE_UPDATE/MANUAL/PRE_UNINSTALL, fmtBytes, fmtDate) en max-h-80 overflow-y-auto, Crear copia (POST /backup) y por fila Restaurar con AlertDialog ("Los datos actuales serán reemplazados por el snapshot") → POST /restore.
+    89→  - diagnostics-panel.tsx: DiagnosticsPanel — POST /diagnostics con normalizador defensivo del bundle, resumen (estado/versión/salud/appFilesOk/plataforma), findings como Cards con badge de severidad + code font-mono + reparaciones con RiskBadge (LOW zinc/MEDIUM amber/HIGH red); risk !== LOW abre AlertDialog "Reparación con riesgo {risk}: {description} ¿Continuar?" → POST /repair {actionId, confirmed:true}; maneja REPAIR_REQUIRES_CONFIRMATION y PRODUCT_BUSY; Exportar bundle JSON vía blob (a.download="albra-diagnostics-{productId}.json"); nota de redacción automática de secretos.
+    90→  - logs-panel.tsx: LogsPanel — Select de nivel (todos/debug/info/warn/error), refresh manual + auto-refresh cada 5s solo con visibilityState==="visible", GET /logs?limit=100&level=…, filas font-mono text-xs con hora corta, Badge de nivel (error red/warn amber/info emerald-700/debug zinc), canal, mensaje y data JSON plegable; max-h-96 overflow-y-auto.
+    91→  - runs-history.tsx: RunsHistory — GET /api/runs?productId={id}&limit=20 al montar + botón refrescar, Accordion "OPERACIÓN · Badge estado · fecha" (SUCCESS emerald/WARNING amber/FAILURE red/ROLLED_BACK amber/RUNNING amber pulsante) con <RunSteps> y Alert red si run.error.
+    92→  - config-panel.tsx: ConfigPanel — "Tu configuración" (USER: Input string/email, number, Switch boolean, Select con options, secret type password con placeholder hasSecret ? "•••••••• (guardado — deja vacío para conservar)" : "Sin definir" + nota SecretStore), "Sistema (administrado por ALBRA)" read-only con Lock, "Producto" read-only, proveedores con Badge DISCOVERED zinc/HEALTHY+CONNECTED emerald/otros amber; Guardar cambios → PUT /config {values} (secret solo si el usuario escribió algo). El form se hidrata UNA vez por productId (ref initializedFor) para no pisar la edición con el poll de 4s.
+    93→  - uninstall-dialog.tsx: UninstallDialog — RadioGroup KEEP/EXPORT (nota exports/)/DELETE (rojo + Alert de borrado permanente), Checkbox "Entiendo que {displayName} se eliminará de esta máquina", botón rojo Desinstalar habilitado solo con checkbox → POST /uninstall {dataMode} → fase running con useRunPolling + RunSteps (no se puede cerrar durante el run) → SUCCESS toast + onUninstalled() + cerrar.
+    94→  - product-workspace.tsx: ProductWorkspace (raíz) — useProductDetail(productId, 4000); Card "Este producto no está instalado" + Volver si detail null tras loading; header sticky con Volver al Launcher, tile Package (ProductDetail no trae campo icon), displayName, StatusBadge, chips versión/puerto/vendor, Badge ALBRA CERTIFIED, INICIAR emerald / DETENER + REINICIAR outline según estado, DropdownMenu ⋯ con "Desinstalar…" rojo; POST /lifecycle {action} con ApiError 409 PRODUCT_BUSY → toast "Hay una operación en curso"; Alert amber si INSTALLING/STARTING/UPDATING/REPAIRING/UNINSTALLING ("Operación en curso: {estado}…"); Tabs con TabsList overflow-x-auto (Resumen/Producto/Actualizar con punto ámbar si hay updates/Copias/Diagnóstico/Registros/Ciclo de vida/Configuración); Resumen = HealthChecks (POST /health con refresh local) + quick facts (versión, puerto, instalado, último health, runtimeHandle, vendor); Producto = {pane} solo si RUNNING, si no Card PowerOff con Iniciar; cada panel recibe callbacks que encadenan refresh() + onChanged().
+    95→- Tipado estricto: DTOs importados de "@/lib/albra/api-types"; imports de RunSteps/StatusBadge desde "@/components/albra/run-steps" y "@/components/albra/status-badge" (creados por agente paralelo, verificados: exports nombrados compatibles). Diseño zinc-950/900/800 con acento emerald-500, rounded-xl p-4/p-6 gap-4, toasts de sonner, todo en español y "use client".
+    96→- Verificación (bunx tsc --noEmit, no dev/build/lint): 0 errores en src/components/albra/workspace/. Los errores restantes del repo son preexistentes (api routes/core/examples) y ajenos a esta tarea.
+    97→
+    98→Stage Summary:
+    99→- src/components/albra/workspace/health-checks.tsx (nuevo; export HealthChecks).
+   100→- src/components/albra/workspace/update-panel.tsx (nuevo; export UpdatePanel).
+   101→- src/components/albra/workspace/backups-panel.tsx (nuevo; export BackupsPanel).
+   102→- src/components/albra/workspace/diagnostics-panel.tsx (nuevo; export DiagnosticsPanel).
+   103→- src/components/albra/workspace/logs-panel.tsx (nuevo; export LogsPanel).
+   104→- src/components/albra/workspace/runs-history.tsx (nuevo; export RunsHistory).
+   105→- src/components/albra/workspace/config-panel.tsx (nuevo; export ConfigPanel).
+   106→- src/components/albra/workspace/uninstall-dialog.tsx (nuevo; export UninstallDialog).
+   107→- src/components/albra/workspace/product-workspace.tsx (nuevo; export ProductWorkspace — componente raíz con props { productId, pane?, onBack, onChanged }).
+   108→
+   109→---
+   110→Task ID: 6-b
+   111→Agent: api-routes-agent
+   112→Task: Capa API completa (30 rutas + helper de serialización)
+   113→
+   114→Work Log:
+   115→- Leí worklog.md (tasks 1, 12-a) y el código real del núcleo ANTES de escribir: contracts/index.ts, api-types.ts, core/{bootstrap,installer,updater,uninstaller,health,diagnostics,repair,certification,cleanroom,runtime,registry,runs,logger,audit,secrets}.ts, adapters/index.ts, package/format.ts, products/{catalog,data}.ts, reports-content.ts, prisma/schema.prisma. Ningún archivo existente modificado (verificado con git status/diff: los cambios en core/installer.ts y core/runs.ts son de otros agentes en paralelo).
+   116→- Creé src/lib/albra/api-serialize.ts (nuevo): ApiError(status, code, message, userMessage) + errorResponse() con mapeo central de códigos que el núcleo lanza como Error("CODE") plano (PRODUCT_NOT_INSTALLED→404, PRODUCT_BUSY→409 con userMessage "Hay una operación en curso para este producto", NO_PORT_AVAILABLE→400, PACKAGE_NOT_FOUND→404; resto→500 INTERNAL_ERROR); helpers iso(), semverGt(), asArray<T>() (cast defensivo de columnas Json), clampInt(), readJson(), toRunDTO(row) (dates ISO), assertRunning(productId) (404 si no instalado / 503 SERVICE_STOPPED con userMessage "{displayName} está detenido. Inícialo para usarlo." si state !== "RUNNING"), loadContract(productId, version) (contrato real del paquete firmado con fallback a getContractFor), buildProductConfig() (3 scopes USER/SYSTEM/PRODUCT + campos secret SIN valor + mapa secrets[fieldKey]=existe consultando SecretRecord, purga cualquier fuga de secretos de los scopes), toContactDTO/toDealDTO/toLeadDTO/isDealStage/isLeadStatus. Next.js 16: params como Promise en todas las rutas dinámicas, `export const dynamic = "force-dynamic"` + ensureBootstrap() en los 30 handlers.
+   117→- Rutas plataforma (10): GET /api/system (SystemInfoDTO: adapter.info() + count InstalledProduct + readdir PATHS.packages *.albra + uptimeS + version 1.0.0); GET /api/catalog (CATALOG + listInstalled + isLocked busy + platformState certification:{id}.passed + updateAvailable con semverGt; latestVersion con fallback entry.latestVersion para locked sin paquete); POST /api/preflight {packageId}→PreflightReport; POST /api/install {packageId} (403 ENTITLEMENT_REQUIRED userMessage "Producto no adquirido" si locked, 400 si !installable, 404 si no está en catálogo)→{runId}; GET /api/runs?productId&limit(20)→{runs}; GET /api/runs/[id]→runDTO|404 RUN_NOT_FOUND; GET /api/audit?limit(50)→{events}; GET /api/packages (readdir + readPackageFile + verifyPackage + statSync size, tampered=fileName.includes("tampered"), válidos primero luego packageId/version; archivo no parseable entra como entrada degradada verifyReason PACKAGE_PARSE_ERROR); POST /api/packages/verify {fileName}→{valid,reason?}; /api/certification GET ?productId(crm)→{certification|null} (steps de row.steps, passed = result.passed ?? status==="SUCCESS") y POST {productId?}→{runId}; POST /api/cleanroom→{ok,removed}; GET /api/reports→{reports: REPORTS}.
+   118→- Rutas de producto (12): GET /api/products/[id]→ProductDetail completo (contrato del paquete, configFields, configValues 3 scopes + secrets map, providers de ProviderRecord + descripción del contrato, checks del último HealthSnapshot o [] y "UNKNOWN", updates de PACKAGE_BUILDS con semverGt + hasMigration, rollbackAvailable = backup PRE_UPDATE con version != instalada, backups, certified/certifiedAt de platformState); /config GET (bloque config) y PUT {values} (solo USER no systemManaged; secret con valor no vacío → putSecret(key, valor, productId) y NUNCA a ConfigRecord; audit CONFIG_CHANGED {keys}; devuelve config actualizada); POST /lifecycle {action START|STOP|RESTART}→{ok,port?} con PRODUCT_BUSY→409; /health GET (último snapshot|404 HEALTH_NOT_FOUND) y POST (runHealthChecks→{overall,checks}); GET /logs?level&limit(100)→{logs}; /diagnostics POST (collectDiagnostics→DiagnosticsDTO con recentLogs ISO) y GET (último DiagnosticBundleRec→{bundle}|404); POST /repair {actionId,confirmed?} (REPAIR_REQUIRES_CONFIRMATION→400 userMessage "Esta reparación requiere confirmación explícita"; contrasta el run real para no reportar éxito falso); POST /update {targetVersion,injectFailure?}→{runId}; POST /rollback→{runId}; /backup GET→{backups} y POST {note?}→{id}; POST /restore {backupId} (404 BACKUP_NOT_FOUND si no es del producto; error→400); POST /uninstall {dataMode KEEP|EXPORT|DELETE}→{runId}.
+   119→- Datos de producto gated con assertRunning (8): /api/products/[id]/crm/contacts GET(asc)/POST {name*}→201; .../contacts/[cid] PATCH {tags}/DELETE (404 CONTACT_NOT_FOUND); /crm/deals GET/POST {title*, value number, stage validado}→201; /crm/deals/[did] PATCH {stage validado}/DELETE; /leads GET/POST {name*, source WEB por defecto, status validado, score int}; /leads/[lid] PATCH {status}/DELETE (404 LEAD_NOT_FOUND). Todos 503 SERVICE_STOPPED si el producto no está RUNNING.
+   120→- Verificación: bun run lint → 0 problemas en src/app/api/** y api-serialize.ts (los 10 errores restantes son de src/components/albra/*, src/components/{crm,leads}/* y src/hooks/use-albra.ts del agente de UI + 2 warnings preexistentes en core; no los toqué). bunx tsc --noEmit → mis archivos limpios salvo TS2307 de "@/lib/albra/core/backup" en products/[id]/route.ts, products/[id]/backup/route.ts y products/[id]/restore/route.ts.
+   121→- ATENCIÓN ORCHESTRADOR: src/lib/albra/core/backup.ts NO existe todavía en disco (confirma ls), aunque ya lo importan core/updater.ts, core/uninstaller.ts y core/certification.ts (createBackup, restoreBackup, latestBackup, deleteBackupsFor). Es responsable del agente del núcleo (task 6-a/main). Mis 3 rutas lo importan según la firma contractual fijada por mi especificación y por los consumidores existentes: listBackups(productId)→BackupRecord[], createBackup(productId, kind, note?)→{id,...}, restoreBackup(backupId)→{ok, error?}. En cuanto ese archivo exista con esos exports, mis rutas compilan sin cambios.
+   122→
+   123→Stage Summary:
+   124→- 30 route handlers nuevos bajo src/app/api/: system, catalog, preflight, install, runs, runs/[id], audit, packages, packages/verify, products/[id], products/[id]/config, products/[id]/lifecycle, products/[id]/health, products/[id]/logs, products/[id]/diagnostics, products/[id]/repair, products/[id]/update, products/[id]/rollback, products/[id]/backup, products/[id]/restore, products/[id]/uninstall, certification, cleanroom, reports, products/[id]/crm/contacts, products/[id]/crm/contacts/[cid], products/[id]/crm/deals, products/[id]/crm/deals/[did], products/[id]/leads, products/[id]/leads/[lid].
+   125→- src/lib/albra/api-serialize.ts (nuevo): ApiError/errorResponse (contrato de errores {error:{code,message,userMessage?}} en español), iso, semverGt, toRunDTO, assertRunning, loadContract, buildProductConfig, DTO mappers.
+   126→- Decisiones: errores centralizados en errorResponse (mapea códigos planos del núcleo), secretos jamás serializados (solo secrets map de existencia), repair contrasta el run real para estado veraz, contract cargado del paquete firmado con fallback al catálogo, catalog latestVersion con fallback entry.latestVersion para locked, PUT config ignora claves no editables y serializa objetos anidados como JSON string.
+   127→
+   128→---
+   129→Task ID: 2,3,4,5,6,7,8 (main)
+   130→Agent: main-architect
+   131→Task: WAVE 1-8 — Contracts, Package, Core, Installer, Health/Diagnostics, Update/Rollback, Piloto CRM+LEADS, APIs
+   132→
+   133→Work Log:
+   134→- Prisma schema: 15 modelos de plataforma + 3 tablas de producto (CrmContact/CrmDeal/LeadRecord). db:push OK.
+   135→- LAYER 1-2: contracts/index.ts (Zod, 11 contratos separados + engine de compatibilidad COMPATIBLE/INCOMPATIBLE/UPGRADE_REQUIRED/MIGRATION_REQUIRED).
+   136→- LAYER 3: package/format.ts — ALBRA-PACKAGE 1.0.0 con sha256 por archivo + payloadHash + packageHash + firma HMAC-SHA256; verifier rechaza PACKAGE_FORMAT_UNKNOWN, FILE_CHECKSUM_MISMATCH, SIGNATURE_INVALID, etc. Bóveda: crm-1.0.0, crm-1.1.0, leads-1.0.0 + crm-1.0.0-tampered (demo de rechazo).
+   137→- LAYER 4: adapters/index.ts — DeploymentAdapter con LocalDevAdapter real (puertos, disco, checksums) + WindowsLocalAdapter (win32 auto) + SelfHostedDeploymentAdapter (WAVE 11 especificado).
+   138→- LAYER 5: registry+locks, runtime (START/STOP/RESTART), health (7 checks reales), installer (15 estados, PREPARE/STAGE/COMMIT/ROLLBACK), updater (CHECK→COMMIT + rollback automático + rollback vault-based post-commit), uninstaller (PRECHECK→VALIDATE con KEEP/EXPORT/DELETE), diagnostics (COLLECT→CLASSIFY→EXPLAIN→SUGGEST), repair (riesgos LOW/MEDIUM con confirmación), backup (validación), runs observables con polling, certification (17 pasos), cleanroom.
+   139→- LAYER 6: catalog.ts (CRM piloto v1.0.0/1.1.0 con migración crm-2-tags real, LEADS, KREA/TRADING bloqueados por entitlement), data.ts (seeds/export/import/isolation), migrations.ts.
+   140→- Fix durante pruebas: instalador usaba latest en vez de versión base; check dependencies marcaba FAIL; version bump movido a SWAP para coherencia de health; setState(STOPPED) tras rollback eliminado.
+   141→
+   142→Stage Summary:
+   143→- APIs probadas end-to-end: install SUCCESS (15 estados), update 1.1.0 SUCCESS con migración, rollback vault SUCCESS, fallo inyectado MIGRATION → ROLLED_BACK automático, gate 503 SERVICE_STOPPED con userMessage, aislamiento CRM/LEADS verificado, cleanroom OK, certification 17/17 PASS → ALBRA CERTIFIED.
+   144→
+   145→---
+   146→Task ID: 10,11,13 (main)
+   147→Agent: main-architect
+   148→Task: WAVE 5 Launcher UI assembly + logo + verificación browser + LIPO
+   149→
+   150→Work Log:
+   151→- Logo ALBRA generado (image-generation) en public/albra-logo.png.
+   152→- page.tsx: Launcher completo (header toolbar con 6 diálogos, grid de ProductCards, ActivityFeed, footer sticky mt-auto, panes CRM/LEADS cableados al workspace).
+   153→- layout.tsx: dark + sonner Toaster + metadata ALBRA.
+   154→- Integración: backup.ts restaurado (escritura interrumpida), 10 errores de ESLint corregidos (refs en render, setState en effects, factories de iconos, expresión sin efecto), 2 bugs de engine corregidos.
+   155→- Verificación agent-browser: launcher renderiza (CRM 🟢 + ALBRA CERTIFIED + feed real), workspace con 8 tabs, health 7/7 PASS, pestaña Producto con CRM real, contacto creado desde UI, tab Actualizar completa, responsive móvil OK. dev.log sin errores de runtime.
+   156→- LIPO: KEEP (contratos, firma, runs observables, certification), DELETE (User/Post demo), docs generados por agente 12-a (9 docs + reports-content).
+   157→
+   158→Stage Summary:
+   159→- MVP COMPLETO Y CERTIFICADO: INSTALL/CONFIGURE/START/STOP/RESTART/HEALTH/UPDATE/ROLLBACK/DIAGNOSTICS/REPAIR/BACKUP/RESTORE/UNINSTALL + clean-room + certification 17/17 PASS. Lint 0 errores, TSC 0 errores, browser verificado.
+   160→
