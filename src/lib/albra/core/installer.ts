@@ -22,10 +22,14 @@ import { readPackageFile, verifyPackage, type AlbraPackage } from "@/lib/albra/p
 import { seedProductData } from "@/lib/albra/products/data";
 import { withLock } from "@/lib/albra/core/registry";
 import { runHealthChecks } from "@/lib/albra/core/health";
-import { startProduct } from "@/lib/albra/core/runtime";
+import { startProductCore } from "@/lib/albra/core/runtime";
 import { Run, sleep, registerRunPromise } from "@/lib/albra/core/runs";
 import { log } from "@/lib/albra/core/logger";
 import { audit } from "@/lib/albra/core/audit";
+// V2 WAVE C: fuentes GitHub + dependencias + parche de contrato de origen
+import { parseSourceContract, type RuntimeRequirement, type InstallScriptsPolicy } from "@/lib/albra/contracts/source";
+import { prepareDependencies, AlbraDepsError } from "@/lib/albra/core/deps";
+import { readScriptsTrustState, type GithubRefType } from "@/lib/albra/sources/github";
 
 const STEP_DEFS = [
   { step: "DISCOVER", label: "Descubriendo paquetes disponibles" },
@@ -131,7 +135,15 @@ export async function preflight(packageId: string): Promise<PreflightReport> {
   return { ok: !issues.some(i => i.severity === "BLOCKER"), issues, platform, assignedPort };
 }
 
-export async function runInstall(packageId: string, opts?: { paceMs?: number }): Promise<{ runId: string }> {
+/** Origen GitHub del paquete (V2 WAVE C) — se registra en REGISTER. */
+export interface GithubInstallOrigin {
+  repo: string;
+  refType: GithubRefType;
+  ref: string;
+  commitSha?: string | null;
+}
+
+export async function runInstall(packageId: string, opts?: { paceMs?: number; origin?: GithubInstallOrigin }): Promise<{ runId: string }> {
   const pace = opts?.paceMs ?? 220;
   const run = await Run.create("INSTALL", packageId, STEP_DEFS);
   const runId = run.id;
@@ -141,6 +153,9 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number }):
     let staged: AlbraPackage | null = null;
     let stagedContractValid = false;
     let port: number | undefined;
+    // V2 WAVE C: extensiones de origen declaradas por el paquete (manifest.metadata)
+    let declaredRuntimes: RuntimeRequirement[] = [];
+    let declaredScripts: InstallScriptsPolicy["scripts"] = [];
     try {
       await withLock(packageId, async () => {
         // DISCOVER
@@ -178,6 +193,16 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number }):
         const fileName = `${packageId}-${latest}.albra`;
         const pkg = readPackageFile(fileName);
         if (!pkg) throw new Error("PACKAGE_FILE_MISSING");
+        // V2 WAVE C: parche de contrato de origen (source/runtimes/install) embebido
+        // en manifest.metadata por el editor. Bóveda clásica: metadata sin parche →
+        // parseo trivial válido con campos ausentes (regresión cero).
+        const patchParsed = parseSourceContract(pkg.manifest.metadata);
+        if (!patchParsed.ok) {
+          await log({ channel: "SYSTEM", productId: packageId, level: "warn", message: `manifest.metadata con extensiones no válidas (ignoradas): ${patchParsed.errors.join("; ")}` });
+        }
+        const sourcePatch = patchParsed.ok ? patchParsed.patch : undefined;
+        declaredRuntimes = sourcePatch?.runtimes ?? [];
+        declaredScripts = sourcePatch?.install?.scripts ?? [];
         const dlPath = path.join(PATHS.downloads, fileName);
         writeFileAtomic(dlPath, JSON.stringify(pkg));
         await run.done("DOWNLOAD", "SUCCESS", `Paquete descargado (${(fs.statSync(dlPath).size / 1024).toFixed(1)} KB)`);
@@ -198,11 +223,37 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number }):
         await sleep(pace);
         fs.rmSync(stagingDir, { recursive: true, force: true });
         fs.mkdirSync(stagingDir, { recursive: true });
-        await run.done("PREPARE", "SUCCESS", "Área de staging creada");
+        let prepareDetail = "Área de staging creada";
+        if (declaredRuntimes && declaredRuntimes.length > 0) {
+          // V2 WAVE C: verificación temprana de runtimes requeridos (fail-fast
+          // antes de gastar trabajo; staging aún vacío → solo detección).
+          const check = await prepareDependencies({
+            appDir: stagingDir,
+            runtimes: declaredRuntimes,
+            log: (message, data) => log({ channel: "SYSTEM", productId: packageId, message, data }),
+          });
+          prepareDetail = `Área de staging creada · runtimes requeridos: ${check.summary}`;
+        }
+        await run.done("PREPARE", "SUCCESS", prepareDetail);
 
         // INSTALL (stage archivos)
         await run.begin("INSTALL");
         await sleep(pace);
+        // V2 WAVE C (b): política de scripts — ANTES de escribir archivos. La
+        // aprobación efectiva vive en PlatformState (trust:scripts:<fileName>);
+        // no se depende de campos mutables del paquete.
+        if (declaredScripts.length > 0) {
+          const trust = await readScriptsTrustState(fileName);
+          if (trust.policy !== "APPROVED") {
+            const blocked = new Error(
+              "INSTALL_SCRIPTS_BLOCKED — Este paquete incluye scripts de instalación que requieren aprobación explícita de confianza (revisa el origen del paquete y apruébalos en Seguridad)",
+            ) as Error & { code?: string; userMessage?: string };
+            blocked.code = "INSTALL_SCRIPTS_BLOCKED";
+            blocked.userMessage = "Este paquete incluye scripts de instalación que requieren aprobación explícita de confianza (revisa el origen del paquete y apruébalos en Seguridad)";
+            await audit({ type: "PACKAGE_REJECTED", productId: packageId, severity: "ERROR", detail: { reason: "INSTALL_SCRIPTS_BLOCKED", fileName, scripts: declaredScripts.map(s => s.path) } });
+            throw blocked;
+          }
+        }
         for (const file of pkg.payload.application) {
           const target = path.join(stagingDir, file.path);
           fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -216,7 +267,23 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number }):
         staged = pkg;
         stagedContractValid = parseProductContract(pkg.contract).ok;
         if (!stagedContractValid) throw new Error("CONTRACT_INVALID_AFTER_STAGE");
-        await run.done("INSTALL", "SUCCESS", `${pkg.payload.application.length} archivos verificados en staging`);
+        let installDetail = `${pkg.payload.application.length} archivos verificados en staging`;
+        // V2 WAVE C (a): preparación de dependencias AISLADA en staging
+        // (post-staging, pre-commit: si falla, el rollback elimina staging).
+        if (declaredRuntimes && declaredRuntimes.length > 0) {
+          const deps = await prepareDependencies({
+            appDir: stagingDir,
+            runtimes: declaredRuntimes,
+            log: (message, data) => log({ channel: "SYSTEM", productId: packageId, message, data }),
+          });
+          installDetail += ` · dependencias: ${deps.summary}`;
+        }
+        if (declaredScripts.length > 0) {
+          // Los scripts (incluidos en payload.application) quedaron escritos:
+          // NO se ejecutan — la ejecución es un WAVE futuro.
+          installDetail += ` · ${declaredScripts.length} script(s) aprobados, ejecución diferida (WAVE futuro)`;
+        }
+        await run.done("INSTALL", "SUCCESS", installDetail);
 
         // CONFIGURE (separación USER / SYSTEM / PRODUCT; sin .env para el usuario)
         await run.begin("CONFIGURE");
@@ -261,6 +328,15 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number }):
         await sleep(pace);
         commitDirectory(stagingDir, productAppDir(packageId));
         fs.mkdirSync(productDataDir(packageId), { recursive: true });
+        // V2 WAVE C (c): cadena de origen GitHub en el registro del producto
+        const originFields = opts?.origin
+          ? {
+              originType: "github",
+              originRepo: opts.origin.repo,
+              originRef: opts.origin.ref,
+              originCommit: opts.origin.commitSha ?? null,
+            }
+          : {};
         await db.installedProduct.upsert({
           where: { productId: packageId },
           create: {
@@ -276,6 +352,7 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number }):
             packageHash: verdict.packageHash,
             entitlement: null,
             installedAt: new Date(),
+            ...originFields,
           },
           update: {
             version: pkg.manifest.version,
@@ -283,14 +360,15 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number }):
             port,
             packageHash: verdict.packageHash,
             installedAt: new Date(),
+            ...originFields,
           },
         });
-        await run.done("REGISTER", "SUCCESS", `Registrado v${pkg.manifest.version} (commit transaccional completado)`);
+        await run.done("REGISTER", "SUCCESS", `Registrado v${pkg.manifest.version} (commit transaccional completado)${opts?.origin ? ` · origen github ${opts.origin.repo}@${opts.origin.refType}:${opts.origin.ref}` : ""}`);
 
         // START
         await run.begin("START");
         await sleep(pace);
-        const startRes = await startProduct(packageId);
+        const startRes = await startProductCore(packageId);
         if (!startRes.ok) throw new Error(`SERVICE_START_FAILED — ${startRes.error}`);
         await run.done("START", "SUCCESS", `Servicio activo en puerto ${startRes.port}`);
 
@@ -310,6 +388,10 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number }):
       });
     } catch (e) {
       const message = (e as Error).message;
+      // V2 WAVE C: los errores de dependencias llevan userMessage en español
+      if (e instanceof AlbraDepsError) {
+        await log({ channel: "SYSTEM", productId: packageId, level: "error", message: `${e.code}: ${e.userMessage}` });
+      }
       // ROLLBACK transaccional: eliminar staging y volver a estado consistente.
       try {
         fs.rmSync(stagingDir, { recursive: true, force: true });

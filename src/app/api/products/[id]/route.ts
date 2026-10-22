@@ -7,6 +7,7 @@ import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { requireInstalled } from "@/lib/albra/core/registry";
 import { latestHealth } from "@/lib/albra/core/health";
+import { getRuntimeEvidence } from "@/lib/albra/core/runtime";
 import { listBackups } from "@/lib/albra/core/backup";
 import { PACKAGE_BUILDS } from "@/lib/albra/products/catalog";
 import { db } from "@/lib/db";
@@ -20,6 +21,7 @@ import {
 } from "@/lib/albra/api-serialize";
 import type {
   BackupDTO,
+  ExitEvidenceDTO,
   HealthCheckDTO,
   LifecycleStateDTO,
   ProductDetail,
@@ -99,6 +101,19 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const certRow = await db.platformState.findUnique({ where: { key: `certification:${id}` } });
     const cert = (certRow?.value ?? null) as { passed?: boolean; at?: string } | null;
 
+    // Evidencia de proceso REAL verificada en el SO (pidfile + identidad + /health autenticado)
+    const runtime = await getRuntimeEvidence(id);
+
+    // Evidencia persistida de la última salida del proceso (p.ej. terminación inesperada)
+    const lastExitEvidence = (() => {
+      if (!installed.lastExitEvidence) return null;
+      try {
+        return JSON.parse(installed.lastExitEvidence) as ExitEvidenceDTO;
+      } catch {
+        return null;
+      }
+    })();
+
     const detail: ProductDetail & { configValues: typeof configValues } = {
       productId: installed.productId,
       displayName: installed.displayName,
@@ -121,6 +136,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       configValues,
       certified: Boolean(cert?.passed),
       ...(cert?.at ? { certifiedAt: iso(cert.at) } : { certifiedAt: null }),
+      runtime,
+      lastExitEvidence,
     };
 
     return NextResponse.json(detail);

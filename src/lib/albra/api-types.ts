@@ -3,6 +3,57 @@
  * Única fuente de verdad para la UI.
  */
 
+// ───────────── Evidencia de proceso real (V2) ─────────────
+
+export type RuntimeOsStateDTO =
+  | "RUNNING"        // pidfile + vivo + identidad verificada + DB coherente
+  | "ORPHAN_RUNNING" // vivo en el SO pero la DB no lo sabe → adoptable
+  | "CRASHED"        // terminación inesperada (sin exit.json)
+  | "EXITED_CLEAN"   // salida ordenada (exit.json presente)
+  | "LOST"           // DB decía RUNNING pero no hay pidfile ni proceso
+  | "STOPPED"
+  | "UNKNOWN";
+
+export interface RuntimeHealthProbeDTO {
+  ok: boolean;
+  latencyMs?: number;
+  error?: string;
+}
+
+/**
+ * Evidencia de proceso real verificada en el SO (pidfile + identidad vía
+ * /proc + /health autenticado con cross-check de PID). La DB es registro;
+ * esto es lo que el sistema operativo realmente reporta.
+ */
+export interface RuntimeEvidenceDTO {
+  osState: RuntimeOsStateDTO;
+  pid?: number;
+  port?: number;
+  startedAt?: string;
+  uptimeS?: number;
+  identityVerified?: boolean;
+  exitReason?: string;
+  errLogTail?: string;
+  lastHeartbeatAt?: string;
+  portServing?: boolean;
+  healthProbe?: RuntimeHealthProbeDTO;
+}
+
+/**
+ * Evidencia persistida de la última salida del proceso
+ * (InstalledProduct.lastExitEvidence, JSON parseado).
+ * Tipos conocidos: UNEXPECTED_EXIT · GRACEFUL_STOP · FORCED_STOP ·
+ * GRACEFUL_EXIT · START_FAILED · LOST.
+ */
+export interface ExitEvidenceDTO {
+  type: string;
+  reason?: string;
+  evidence?: string;
+  at?: string;
+  pid?: number;
+  errTail?: string;
+}
+
 // ───────────── Runs (observabilidad de operaciones) ─────────────
 
 export type RunStepStatus = "PENDING" | "RUNNING" | "SUCCESS" | "WARNING" | "FAILURE" | "SKIPPED";
@@ -50,6 +101,10 @@ export interface CatalogItem {
   port: number | null;
   busy: boolean;
   certified: boolean;
+  /** PID del proceso real en el SO cuando está en ejecución; null si no hay. */
+  pid: number | null;
+  /** Evidencia persistida de la última salida del proceso (parseada; null si no hay). */
+  lastExitEvidence: ExitEvidenceDTO | null;
 }
 
 // ───────────── Detalle de producto ─────────────
@@ -114,6 +169,10 @@ export interface ProductDetail {
   configValues: { USER: Record<string, unknown>; SYSTEM: Record<string, unknown>; PRODUCT: Record<string, unknown> };
   certified: boolean;
   certifiedAt?: string | null;
+  /** Evidencia de proceso real verificada en el SO en el momento de la consulta. */
+  runtime: RuntimeEvidenceDTO;
+  /** Evidencia persistida de la última salida (parseada; null si no hay). */
+  lastExitEvidence: ExitEvidenceDTO | null;
 }
 
 // ───────────── Preflight / Paquetes / Sistema ─────────────
@@ -150,6 +209,11 @@ export interface PackageDTO {
   sha256: string;
   signatureKeyId: string;
   tampered: boolean;
+  /** V2 TRUST CHAIN: autenticidad (quién firmó), no solo integridad. */
+  trustLevel?: "TRUSTED" | "UNTRUSTED_SIGNER" | "DEV_LOCAL" | "NONE";
+  reasons?: string[];
+  signatureAlg?: string | null;
+  signerKeyId?: string;
 }
 
 export interface SystemInfoDTO {

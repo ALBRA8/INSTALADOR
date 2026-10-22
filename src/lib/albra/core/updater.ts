@@ -18,7 +18,7 @@ import { readPackageFile, verifyPackage, type AlbraPackage } from "@/lib/albra/p
 import { parseProductContract } from "@/lib/albra/contracts";
 import { withLock } from "@/lib/albra/core/registry";
 import { runHealthChecks } from "@/lib/albra/core/health";
-import { startProduct, stopProduct } from "@/lib/albra/core/runtime";
+import { startProductCore, stopProductCore } from "@/lib/albra/core/runtime";
 import { createBackup } from "@/lib/albra/core/backup";
 import { executeMigration } from "@/lib/albra/products/migrations";
 import { importProductData } from "@/lib/albra/products/data";
@@ -117,7 +117,7 @@ export async function runUpdate(productId: string, targetVersion: string, inject
         // STOP
         await run.begin("STOP");
         await sleep(pace);
-        await stopProduct(productId);
+        await stopProductCore(productId);
         stopped = true;
         await run.done("STOP", "SUCCESS", "Servicio detenido de forma segura");
 
@@ -153,7 +153,7 @@ export async function runUpdate(productId: string, targetVersion: string, inject
         if (injectFailure === "START") {
           throw new Error("SERVICE_START_FAILED — fallo simulado por el usuario (inyección de fallo)");
         }
-        const startRes = await startProduct(productId);
+        const startRes = await startProductCore(productId);
         if (!startRes.ok) throw new Error(`SERVICE_START_FAILED — ${startRes.error}`);
         await run.done("START", "SUCCESS", `v${targetVersion} activa en puerto ${startRes.port}`);
 
@@ -213,7 +213,7 @@ export async function runUpdate(productId: string, targetVersion: string, inject
         try {
           await run.begin("ROLLBACK_START");
           await sleep(pace);
-          const startRes = await startProduct(productId);
+          const startRes = await startProductCore(productId);
           if (!startRes.ok) throw new Error(startRes.error ?? "START_FAILED");
           await run.done("ROLLBACK_START", "SUCCESS", "Servicio anterior reactivado");
         } catch (rbError) {
@@ -282,7 +282,7 @@ export async function rollbackLastUpdate(productId: string, pace = 200): Promise
 
         await run.begin("STOP");
         await sleep(pace);
-        await stopProduct(productId);
+        await stopProductCore(productId);
         await run.done("STOP", "SUCCESS", "Servicio detenido");
 
         await run.begin("RESTORE_APP");
@@ -313,7 +313,7 @@ export async function rollbackLastUpdate(productId: string, pace = 200): Promise
 
         await run.begin("START");
         await sleep(pace);
-        const startRes = await startProduct(productId);
+        const startRes = await startProductCore(productId);
         if (!startRes.ok) throw new Error(`SERVICE_START_FAILED — ${startRes.error}`);
         await run.done("START", "SUCCESS", `v${backup.version} en ejecución`);
 

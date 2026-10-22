@@ -30,6 +30,14 @@ model InstalledProduct {
   startedAt     DateTime?
   stoppedAt     DateTime?
   lastHealthAt  DateTime?
+  // V2 REAL RUNTIME: evidencia de proceso real del sistema operativo
+  pid             Int?      // PID real del proceso del producto
+  bootToken       String?   // token de instancia para endpoint /health autenticado
+  lastExitEvidence String?  // JSON: evidencia de la última salida (graceful/crash + tail de err.log)
+  originType      String?   // vault | github
+  originRepo      String?   // owner/repo si originType=github
+  originRef       String?   // tag/release/commit fijado (NUNCA rama)
+  originCommit    String?   // sha resuelto
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }
@@ -44,6 +52,14 @@ model PackageArtifact {
   signature   String
   verified    Boolean  @default(false)
   manifest    Json
+  // V2 TRUST CHAIN: autenticidad (no solo integridad)
+  signerKeyId String?  // id de la clave que firmó
+  signatureAlg String? // hmac-dev | ed25519
+  trustLevel  String?  // DEV_LOCAL | TRUSTED | NONE
+  originType  String?  // vault | github
+  originRepo  String?  // owner/repo si fue importado de GitHub
+  originRef   String?  // tag/release/commit fijado
+  originCommit String? // sha resuelto
   createdAt   DateTime @default(now())
 
   @@unique([packageId, version])

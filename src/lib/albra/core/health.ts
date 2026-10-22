@@ -10,6 +10,8 @@ import { requireInstalled, setState } from "@/lib/albra/core/registry";
 import { getDeploymentAdapter } from "@/lib/albra/adapters";
 import { getContractFor } from "@/lib/albra/products/catalog";
 import { log } from "@/lib/albra/core/logger";
+import { readRuntimeState, probeHealth, isPortServing } from "@/lib/albra/core/process-runtime";
+import { audit } from "@/lib/albra/core/audit";
 
 export interface HealthCheckResult {
   checkId: string;
@@ -27,6 +29,9 @@ export async function runHealthChecks(productId: string): Promise<{ overall: "HE
     { checkId: "runtime", label: "Runtime del servicio", target: "runtime" as const, critical: true },
   ];
   const adapter = getDeploymentAdapter();
+  // V2: estado REAL del sistema operativo una sola vez por corrida
+  const rs = await readRuntimeState(productId, installed.state === "RUNNING");
+  const realRunning = rs.osState === "RUNNING" || rs.osState === "ORPHAN_RUNNING";
   const checks: HealthCheckResult[] = [];
 
   for (const spec of specs) {
@@ -54,12 +59,55 @@ export async function runHealthChecks(productId: string): Promise<{ overall: "HE
           break;
         }
         case "runtime": {
-          const running = installed.state === "RUNNING";
-          result = {
-            ...result,
-            status: running ? "PASS" : "WARN",
-            detail: running ? `Activo (handle ${installed.runtimeHandle ?? "n/a"})` : `Estado actual: ${installed.state}`,
-          };
+          // V2: verificación de PROCESO REAL (pidfile + identidad del SO), no de la DB
+          if (rs.osState === "RUNNING" && rs.identity) {
+            result = {
+              ...result,
+              status: "PASS",
+              detail: `Proceso real vivo (PID ${rs.identity.pid}, uptime ${rs.evidence.uptimeS ?? "?"}s, puerto ${rs.identity.port}, identidad ${rs.evidence.identityVerified ? "verificada" : "no verificable"})`,
+            };
+          } else if (rs.osState === "ORPHAN_RUNNING" && rs.identity) {
+            result = {
+              ...result,
+              status: "WARN",
+              detail: `Proceso vivo (PID ${rs.identity.pid}) pero pendiente de adopción por el INSTALADOR`,
+            };
+          } else if (rs.osState === "CRASHED") {
+            result = {
+              ...result,
+              status: "FAIL",
+              detail: `Terminación inesperada (PID ${rs.identity?.pid ?? "?"}). ${rs.evidence.errLogTail?.slice(-160) ?? "Sin stderr"}`,
+            };
+            // V2: persistir evidencia de crash y auditar (además de la reconciliación)
+            await db.installedProduct.update({
+              where: { productId },
+              data: {
+                pid: null,
+                bootToken: null,
+                lastExitEvidence: JSON.stringify({ type: "UNEXPECTED_EXIT", at: new Date().toISOString(), pid: rs.identity?.pid, errTail: (rs.evidence.errLogTail ?? "").slice(-512) }),
+              },
+            });
+            await audit({ type: "PROCESS_CRASHED", productId, severity: "CRITICAL", detail: { pid: rs.identity?.pid, detectedBy: "health-check" } });
+          } else if (rs.osState === "EXITED_CLEAN") {
+            result = { ...result, status: "WARN", detail: `Proceso detenido con salida ordenada (${rs.evidence.exitReason ?? "n/d"})` };
+          } else if (rs.osState === "LOST") {
+            result = { ...result, status: "FAIL", detail: "El registro decía RUNNING pero no existe proceso ni pidfile (estado perdido)" };
+          } else {
+            result = { ...result, status: "WARN", detail: `El producto no está en ejecución (estado: ${installed.state})` };
+          }
+          break;
+        }
+        case "http-health": {
+          // V2: endpoint de salud AUTENTICADO del proceso real (SKIP si el producto no lo declara/expone)
+          const identity = rs.identity;
+          if (!identity || !installed.bootToken || !realRunning) {
+            result = { ...result, status: installed.state === "RUNNING" ? "FAIL" : "SKIP", detail: installed.state === "RUNNING" ? "Sin proceso real que responda al endpoint de salud" : "Producto detenido — no aplica" };
+            break;
+          }
+          const probe = await probeHealth(identity.port, installed.bootToken, identity.pid, 2500);
+          result = probe.ok
+            ? { ...result, status: "PASS", detail: `/health respondió 200 autenticado en ${probe.latencyMs}ms (pid ${probe.body?.pid}, uptime ${probe.body?.uptimeS}s)` }
+            : { ...result, status: "FAIL", detail: `Endpoint de salud sin respuesta válida: ${probe.error ?? probe.status}` };
           break;
         }
         case "database": {
@@ -99,13 +147,24 @@ export async function runHealthChecks(productId: string): Promise<{ overall: "HE
         }
         case "port": {
           if (installed.port) {
-            const free = await adapter.isPortFree(installed.port);
-            // Si el producto está corriendo, el puerto DEBERÍA estar reservado por ALBRA.
-            result = {
-              ...result,
-              status: installed.state === "RUNNING" ? "PASS" : free ? "PASS" : "WARN",
-              detail: `Puerto ${installed.port} ${installed.state === "RUNNING" ? "asignado y reservado" : free ? "libre (producto detenido)" : "en uso por otro proceso"}`,
-            };
+            const serving = await isPortServing(installed.port);
+            if (realRunning) {
+              // Si el producto está corriendo, el puerto DEBE estar siendo servido por su proceso
+              result = {
+                ...result,
+                status: serving ? "PASS" : "FAIL",
+                detail: serving
+                  ? `Puerto ${installed.port} sirviendo conexiones (127.0.0.1)`
+                  : `Proceso vivo pero el puerto ${installed.port} NO acepta conexiones`,
+              };
+            } else {
+              const free = await adapter.isPortFree(installed.port);
+              result = {
+                ...result,
+                status: free ? "PASS" : "WARN",
+                detail: free ? `Puerto ${installed.port} libre (producto detenido)` : `Puerto ${installed.port} en uso por otro proceso (producto detenido)`,
+              };
+            }
           } else {
             result = { ...result, status: "SKIP", detail: "Puerto no asignado (producto detenido)" };
           }
@@ -139,13 +198,14 @@ export async function runHealthChecks(productId: string): Promise<{ overall: "HE
   await db.healthSnapshot.create({ data: { productId, overall, checks: checks as unknown as object[] } });
   await db.installedProduct.update({
     where: { productId },
-    data: { health: overall, lastHealthAt: new Date(), state: installed.state === "RUNNING" && overall === "FAILED" ? "DEGRADED" : installed.state },
+    data: { health: overall, lastHealthAt: new Date() },
   });
   await log({ productId, channel: "DEBUG", level: overall === "HEALTHY" ? "info" : "warn", message: `Health: ${overall}`, data: { checks: checks.map(c => `${c.checkId}:${c.status}`) } });
   if (overall === "FAILED" && installed.state === "RUNNING") {
     await setState(productId, "FAILED");
   } else if (overall !== "FAILED" && installed.state === "FAILED") {
-    await setState(productId, installed.runtimeHandle ? "RUNNING" : "STOPPED");
+    // V2: decidir por estado real del SO, no por un handle guardado
+    await setState(productId, realRunning ? "RUNNING" : "STOPPED");
   }
   return { overall, checks };
 }

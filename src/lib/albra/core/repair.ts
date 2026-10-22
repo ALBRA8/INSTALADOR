@@ -11,7 +11,7 @@ import { productAppDir, productDataDir } from "@/lib/albra/env";
 import { readPackageFile } from "@/lib/albra/package/format";
 import { getDeploymentAdapter } from "@/lib/albra/adapters";
 import { clearProductData, seedProductData } from "@/lib/albra/products/data";
-import { startProduct, stopProduct, restartProduct } from "@/lib/albra/core/runtime";
+import { startProductCore, stopProductCore, restartProduct } from "@/lib/albra/core/runtime";
 import { runHealthChecks } from "@/lib/albra/core/health";
 import { requireInstalled, withLock } from "@/lib/albra/core/registry";
 import { Run, registerRunPromise, sleep } from "@/lib/albra/core/runs";
@@ -49,7 +49,7 @@ export async function executeRepair(productId: string, actionId: string, confirm
         let detail = "";
         switch (actionId) {
           case "START_SERVICE": {
-            const res = await startProduct(productId);
+            const res = await startProductCore(productId);
             if (!res.ok) throw new Error(res.error ?? "START_FAILED");
             detail = `Servicio iniciado en puerto ${res.port}`;
             break;

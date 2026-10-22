@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  AlertTriangle,
   ArrowUpCircle,
   BadgeCheck,
+  Cpu,
   ExternalLink,
   LineChart,
   Loader2,
@@ -70,8 +72,31 @@ export function ProductCard({
         <StatusBadge state={item.state} health={item.health} />
       </div>
 
-      {/* Chips: puerto / certificado / actualización / bloqueado */}
+      {/* Chips: proceso real / puerto / certificado / actualización / bloqueado */}
       <div className="flex flex-wrap items-center gap-1.5">
+        {item.pid != null && (
+          <span
+            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-xs text-emerald-400"
+            title="Proceso real vivo en el sistema operativo (identidad verificada)"
+          >
+            <Cpu className="size-3" aria-hidden />
+            PID {item.pid}
+          </span>
+        )}
+        {item.lastExitEvidence?.type === "UNEXPECTED_EXIT" && (
+          <span
+            className="inline-flex items-center gap-1 rounded-md border border-red-500/40 bg-red-500/10 px-1.5 py-0.5 text-xs font-medium text-red-400"
+            title="El proceso terminó sin una salida ordenada registrada"
+          >
+            <AlertTriangle className="size-3" aria-hidden />
+            Proceso terminado inesperadamente
+          </span>
+        )}
+        {item.state === "STOPPED" && item.pid == null && (
+          <span className="inline-flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-800/60 px-1.5 py-0.5 text-xs text-zinc-400">
+            Detenido
+          </span>
+        )}
         {item.port != null && (
           <span className="rounded-md border border-zinc-800 bg-zinc-800/60 px-1.5 py-0.5 font-mono text-xs text-zinc-400">
             Puerto {item.port}

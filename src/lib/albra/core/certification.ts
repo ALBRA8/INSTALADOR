@@ -10,7 +10,7 @@ import { db } from "@/lib/db";
 import { runInstall } from "@/lib/albra/core/installer";
 import { runUpdate, rollbackLastUpdate } from "@/lib/albra/core/updater";
 import { runUninstall } from "@/lib/albra/core/uninstaller";
-import { startProduct, stopProduct } from "@/lib/albra/core/runtime";
+import { startProductCore, stopProductCore } from "@/lib/albra/core/runtime";
 import { runHealthChecks } from "@/lib/albra/core/health";
 import { createBackup, restoreBackup, latestBackup } from "@/lib/albra/core/backup";
 import { collectDiagnostics } from "@/lib/albra/core/diagnostics";
@@ -101,7 +101,7 @@ export async function runCertification(productId = "crm", pace = 60): Promise<{ 
     });
 
     if (ok) ok = await record("START", "Arranque del servicio", async () => {
-      const res = await startProduct(productId);
+      const res = await startProductCore(productId);
       if (!res.ok) throw new Error(res.error ?? "START_FAILED");
       return `Puerto ${res.port}`;
     });
@@ -113,13 +113,13 @@ export async function runCertification(productId = "crm", pace = 60): Promise<{ 
     });
 
     if (ok) ok = await record("STOP", "Detención", async () => {
-      const res = await stopProduct(productId);
+      const res = await stopProductCore(productId);
       if (!res.ok) throw new Error(res.error ?? "STOP_FAILED");
       return "Detenido";
     });
 
     if (ok) ok = await record("RESTART", "Reinicio", async () => {
-      const res = await startProduct(productId);
+      const res = await startProductCore(productId);
       if (!res.ok) throw new Error(res.error ?? "START_FAILED");
       return "Reiniciado";
     });

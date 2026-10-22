@@ -25,6 +25,17 @@ export function ensureDirs(): void {
   for (const dir of Object.values(PATHS)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  // V2: endurecimiento de permisos de claves (0600) — nunca legibles por otros
+  try {
+    if (fs.existsSync(PATHS.keys)) {
+      for (const f of fs.readdirSync(PATHS.keys)) {
+        const fp = path.join(PATHS.keys, f);
+        if (fs.statSync(fp).isFile()) fs.chmodSync(fp, 0o600);
+      }
+    }
+  } catch {
+    /* nunca lanzar desde ensureDirs */
+  }
 }
 
 export function productAppDir(productId: string): string {
@@ -32,6 +43,14 @@ export function productAppDir(productId: string): string {
 }
 export function productDataDir(productId: string): string {
   return path.join(PATHS.products, productId, "data");
+}
+/** Directorio de runtime real del producto: pidfile, heartbeat, exit evidence. */
+export function productRuntimeDir(productId: string): string {
+  return path.join(PATHS.products, productId, "runtime");
+}
+/** Directorio de logs reales (stdout/stderr rotativos) del producto. */
+export function productLogsDir(productId: string): string {
+  return path.join(PATHS.logs, "products", productId);
 }
 export function productStagingDir(productId: string, runId: string): string {
   return path.join(PATHS.products, productId, `staging-${runId}`);

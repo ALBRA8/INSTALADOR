@@ -15,6 +15,7 @@ import {
 } from "@/lib/albra/package/format";
 import { getDeploymentAdapter } from "@/lib/albra/adapters";
 import { getLatestVersion } from "@/lib/albra/products/catalog";
+import { reconcileAll } from "@/lib/albra/core/process-runtime";
 
 let bootstrapPromise: Promise<void> | null = null;
 
@@ -89,6 +90,23 @@ async function doBootstrap(): Promise<void> {
     create: { key: "platform:latest", value: { crm: getLatestVersion("crm"), leads: getLatestVersion("leads") } as object },
     update: { value: { crm: getLatestVersion("crm"), leads: getLatestVersion("leads") } as object },
   });
+
+  // V2 REAL RUNTIME: reconciliación DB ↔ sistema operativo al arrancar el INSTALADOR.
+  // Detecta procesos huérfanos (los adopta), crashes (evidencia) y estados perdidos.
+  try {
+    const recs = await reconcileAll();
+    const changed = recs.filter(r => r.changed);
+    if (changed.length > 0) {
+      const value = { at: new Date().toISOString(), changes: changed.map(c => ({ productId: c.productId, from: c.before, to: c.after, evidence: c.evidence })) };
+      await db.platformState.upsert({
+        where: { key: "platform:lastReconcile" },
+        create: { key: "platform:lastReconcile", value },
+        update: { value },
+      });
+    }
+  } catch {
+    /* la reconciliación nunca bloquea el bootstrap */
+  }
 }
 
 export async function ensureBootstrap(): Promise<void> {

@@ -36,7 +36,8 @@ function crmConfigFields(version: string) {
 function crmHealthChecks() {
   return [
     { checkId: "app-files", label: "Archivos de aplicación", target: "application" as const, critical: true },
-    { checkId: "runtime", label: "Runtime del servicio", target: "runtime" as const, critical: true },
+    { checkId: "runtime", label: "Proceso real del servicio", target: "runtime" as const, critical: true },
+    { checkId: "http-health", label: "Endpoint de salud autenticado", target: "http-health" as const, critical: true },
     { checkId: "database", label: "Base de datos", target: "database" as const, critical: true },
     { checkId: "dependencies", label: "Dependencias", target: "dependencies" as const, critical: true },
     { checkId: "storage", label: "Almacenamiento de datos", target: "storage" as const, critical: true },
@@ -130,7 +131,8 @@ function leadsContract(version: string): ProductContract {
     ] },
     health: { checks: [
       { checkId: "app-files", label: "Archivos de aplicación", target: "application" as const, critical: true },
-      { checkId: "runtime", label: "Runtime del servicio", target: "runtime" as const, critical: true },
+      { checkId: "runtime", label: "Proceso real del servicio", target: "runtime" as const, critical: true },
+    { checkId: "http-health", label: "Endpoint de salud autenticado", target: "http-health" as const, critical: true },
       { checkId: "database", label: "Base de datos", target: "database" as const, critical: true },
       { checkId: "storage", label: "Almacenamiento de datos", target: "storage" as const, critical: true },
     ], intervalSeconds: 30 },
@@ -144,18 +146,143 @@ function leadsContract(version: string): ProductContract {
 
 // ─────────────────── Application payload (archivos reales del paquete) ───────────────────
 
-function crmProductJs(version: string): string {
-  return `// ALBRA CRM — runtime module v${version}
-// Módulo de producto. Se ejecuta bajo el Runtime Manager de ALBRA Platform.
-export const product = {
-  id: "crm",
-  version: "${version}",
-  start(ctx) { ctx.log("CRM service started"); return { status: "RUNNING" }; },
-  stop(ctx) { ctx.log("CRM service stopped"); return { status: "STOPPED" }; },
-  health(ctx) { return ctx.checkDatabase() && ctx.checkStorage() ? "HEALTHY" : "DEGRADED"; },
-  migrate(ctx, migration) { ctx.log("Running migration " + migration.migrationId); return migration.run(); },
-};
+/**
+ * V2 — Servidor de producto REAL e instrumentado.
+ * Este archivo se instala como app/product.js y se ejecuta como proceso del SO
+ * (bun/node) bajo el Process Runtime de ALBRA. Marcador requerido por el
+ * verificador de identidad: ALBRA-PRODUCT-RUNTIME
+ */
+function productRuntimeServerJs(productId: string, displayName: string, version: string): string {
+  return `// ${displayName} v${version} — ALBRA-PRODUCT-RUNTIME v2
+// Proceso de producto real: HTTP con /health autenticado, diag, heartbeat,
+// salida ordenada con evidencia. Sin dependencias externas.
+"use strict";
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+
+const args = process.argv.slice(2);
+function argValue(name) {
+  const i = args.indexOf(name);
+  return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+}
+
+const PRODUCT_ID = process.env.ALBRA_PRODUCT_ID || "${productId}";
+const PRODUCT_VERSION = process.env.ALBRA_PRODUCT_VERSION || "${version}";
+const BOOT_TOKEN = process.env.ALBRA_BOOT_TOKEN || "";
+const RUNTIME_DIR = process.env.ALBRA_RUNTIME_DIR || path.join(process.cwd(), "runtime");
+const DATA_DIR = process.env.ALBRA_DATA_DIR || path.join(process.cwd(), "data");
+const PORT = parseInt(argValue("--port") || process.env.ALBRA_PORT || "0", 10);
+
+if (!PORT || !BOOT_TOKEN) {
+  console.error("[albra-product] configuración incompleta: se requieren --port y ALBRA_BOOT_TOKEN");
+  process.exit(2);
+}
+
+const startedAt = Date.now();
+const state = { requestsServed: 0, lastError: null };
+fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+function writeJson(file, obj) {
+  try {
+    const tmp = file + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    console.error("[albra-product] writeEvidence failed:", e.message);
+  }
+}
+function writeExit(reason) {
+  writeJson(path.join(RUNTIME_DIR, "exit.json"), {
+    reason,
+    pid: process.pid,
+    at: new Date().toISOString(),
+    uptimeS: Math.floor((Date.now() - startedAt) / 1000),
+    requestsServed: state.requestsServed,
+  });
+}
+
+// Heartbeat periódico (evidencia de vida sin depender de HTTP)
+const hbTimer = setInterval(() => {
+  writeJson(path.join(RUNTIME_DIR, "heartbeat.json"), {
+    pid: process.pid,
+    at: new Date().toISOString(),
+    uptimeS: Math.floor((Date.now() - startedAt) / 1000),
+    memRSSMB: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+  });
+}, 5000);
+hbTimer.unref();
+
+function send(res, code, obj) {
+  const body = JSON.stringify(obj, null, 2);
+  res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(body);
+}
+
+const server = http.createServer((req, res) => {
+  state.requestsServed++;
+  // Autenticación de instancia: todo endpoint exige el boot token de ALBRA
+  if (req.headers["x-albra-token"] !== BOOT_TOKEN) {
+    send(res, 401, { ok: false, error: "UNAUTHORIZED" });
+    return;
+  }
+  const url = (req.url || "/").split("?")[0];
+  const uptimeS = Math.floor((Date.now() - startedAt) / 1000);
+  if (req.method === "GET" && url === "/health") {
+    send(res, 200, { ok: true, product: PRODUCT_ID, version: PRODUCT_VERSION, pid: process.pid, uptimeS, state: "RUNNING", requestsServed: state.requestsServed });
+    return;
+  }
+  if (req.method === "GET" && url === "/api/diag") {
+    const mem = process.memoryUsage();
+    send(res, 200, { ok: true, diag: { pid: process.pid, product: PRODUCT_ID, version: PRODUCT_VERSION, uptimeS, requestsServed: state.requestsServed, lastError: state.lastError, memory: { rssMB: Math.round(mem.rss / 1048576), heapUsedMB: Math.round(mem.heapUsed / 1048576) }, platform: process.platform, nodeLike: process.version, dataDir: DATA_DIR } });
+    return;
+  }
+  if (req.method === "GET" && url === "/api/status") {
+    send(res, 200, { ok: true, status: "RUNNING", product: PRODUCT_ID, version: PRODUCT_VERSION, uptimeS });
+    return;
+  }
+  if (req.method === "POST" && url === "/api/echo") {
+    let raw = "";
+    req.on("data", (c) => { raw += c; if (raw.length > 65536) req.destroy(); });
+    req.on("end", () => {
+      try { send(res, 200, { ok: true, echo: JSON.parse(raw || "null") }); }
+      catch { send(res, 400, { ok: false, error: "INVALID_JSON" }); }
+    });
+    return;
+  }
+  send(res, 404, { ok: false, error: "NOT_FOUND" });
+});
+
+server.on("error", (err) => {
+  console.error("[albra-product] server error:", err.message);
+  state.lastError = err.message;
+  writeExit("SERVER_ERROR:" + (err.code || ""));
+  process.exit(3);
+});
+
+function graceful(signal) {
+  writeExit(signal);
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+process.on("SIGTERM", () => graceful("SIGTERM"));
+process.on("SIGINT", () => graceful("SIGINT"));
+process.on("uncaughtException", (err) => {
+  state.lastError = err.message;
+  console.error("[albra-product] uncaught:", err.stack || err.message);
+  writeExit("UNCAUGHT_EXCEPTION");
+  process.exit(1);
+});
+
+server.listen(PORT, "127.0.0.1", () => {
+  console.log("[albra-product] " + PRODUCT_ID + " v" + PRODUCT_VERSION + " escuchando en 127.0.0.1:" + PORT + " (pid " + process.pid + ")");
+});
 `;
+}
+
+function crmProductJs(version: string): string {
+  return productRuntimeServerJs("crm", "ALBRA CRM", version);
 }
 
 function crmManifestJson(version: string): string {
@@ -185,15 +312,7 @@ function crmChangelog(version: string): string {
 }
 
 function leadsProductJs(version: string): string {
-  return `// ALBRA Agente Leads — runtime module v${version}
-export const product = {
-  id: "leads",
-  version: "${version}",
-  start(ctx) { ctx.log("Leads service started"); return { status: "RUNNING" }; },
-  stop(ctx) { ctx.log("Leads service stopped"); return { status: "STOPPED" }; },
-  health(ctx) { return ctx.checkDatabase() ? "HEALTHY" : "DEGRADED"; },
-};
-`;
+  return productRuntimeServerJs("leads", "ALBRA Agente Leads", version);
 }
 
 function leadsManifestJson(version: string): string {
