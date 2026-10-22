@@ -98,7 +98,7 @@ export type ConfigurationContract = z.infer<typeof ConfigurationContractSchema>;
 export const HealthCheckSpecSchema = z.object({
   checkId: z.string(),
   label: z.string(),
-  target: z.enum(["application", "runtime", "database", "dependencies", "storage", "port", "providers"]),
+  target: z.enum(["application", "runtime", "database", "dependencies", "storage", "port", "providers", "http-health"]),
   critical: z.boolean().default(true),
 });
 export type HealthCheckSpec = z.infer<typeof HealthCheckSpecSchema>;

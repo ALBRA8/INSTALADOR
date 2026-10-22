@@ -1,0 +1,723 @@
+     1→/**
+     2→ * ALBRA V2 — REAL PROCESS RUNTIME (núcleo de la transformación)
+     3→ *
+     4→ * Gestiona procesos REALES del sistema operativo:
+     5→ *  - spawn del entrypoint autorizado del producto (sin shell, args estructurados)
+     6→ *  - pidfile con identidad verificable (pid + bootToken + entry + versión)
+     7→ *  - verificación de identidad del PID (no basta con que exista)
+     8→ *  - logs reales stdout/stderr con rotación
+     9→ *  - stop ordenado con timeout + terminación forzada
+    10→ *  - detección de crash (terminación inesperada) con evidencia
+    11→ *  - adopción segura de procesos huérfanos tras reinicio del INSTALADOR
+    12→ *  - reconciliación DB ↔ sistema operativo (la DB nunca es la fuente de verdad)
+    13→ *
+    14→ * Plataformas: linux/macOS VERIFICADO en sandbox; win32 implementado
+    15→ * (taskkill/PowerShell) pero NO EJECUTABLE en este entorno → marcado UNTESTED.
+    16→ */
+    17→import fs from "fs";
+    18→import path from "path";
+    19→import net from "net";
+    20→import os from "os";
+    21→import crypto from "crypto";
+    22→import { spawn, execFile } from "child_process";
+    23→import { PATHS, writeFileAtomic, productRuntimeDir, productAppDir } from "@/lib/albra/env";
+    24→import { log } from "@/lib/albra/core/logger";
+    25→
+    26→/* ─────────────────────────── tipos ─────────────────────────── */
+    27→
+    28→export interface ProcessIdentity {
+    29→  pid: number;
+    30→  bootToken: string;
+    31→  port: number;
+    32→  productId: string;
+    33→  version: string;
+    34→  startedAt: string; // ISO
+    35→  entryPath: string;
+    36→  execPath: string;
+    37→  platform: string;
+    38→}
+    39→
+    40→export type RuntimeOsState =
+    41→  | "RUNNING"        // pidfile + vivo + identidad verificada + DB coherente
+    42→  | "ORPHAN_RUNNING" // vivo en el SO pero la DB no lo sabe → adoptable
+    43→  | "CRASHED"        // terminación inesperada (sin exit.json)
+    44→  | "EXITED_CLEAN"   // salida ordenada (exit.json presente)
+    45→  | "LOST"           // DB decía RUNNING pero no hay pidfile ni proceso
+    46→  | "STOPPED"
+    47→  | "UNKNOWN";
+    48→
+    49→export interface RuntimeEvidence {
+    50→  osState: RuntimeOsState;
+    51→  pid?: number;
+    52→  port?: number;
+    53→  startedAt?: string;
+    54→  uptimeS?: number;
+    55→  identityVerified?: boolean;
+    56→  exitReason?: string;
+    57→  errLogTail?: string;
+    58→  lastHeartbeatAt?: string;
+    59→}
+    60→
+    61→export interface StartResult {
+    62→  ok: boolean;
+    63→  pid?: number;
+    64→  bootToken?: string;
+    65→  port?: number;
+    66→  error?: string;
+    67→  detail?: string;
+    68→}
+    69→
+    70→/* ─────────────────────────── paths ─────────────────────────── */
+    71→
+    72→const HEALTH_TIMEOUT_MS = 12_000;
+    73→const HEALTH_POLL_MS = 300;
+    74→const STOP_TIMEOUT_MS = 8_000;
+    75→const LOG_ROTATE_BYTES = 1_500_000;
+    76→const LOG_KEEP = 3;
+    77→const ERR_TAIL_BYTES = 4096;
+    78→
+    79→function runtimeDir(productId: string): string {
+    80→  return productRuntimeDir(productId);
+    81→}
+    82→function pidFile(productId: string): string {
+    83→  return path.join(runtimeDir(productId), "process.json");
+    84→}
+    85→function exitFile(productId: string): string {
+    86→  return path.join(runtimeDir(productId), "exit.json");
+    87→}
+    88→function heartbeatFile(productId: string): string {
+    89→  return path.join(runtimeDir(productId), "heartbeat.json");
+    90→}
+    91→function outLog(productId: string): string {
+    92→  return path.join(PATHS.logs, "products", productId, "out.log");
+    93→}
+    94→function errLog(productId: string): string {
+    95→  return path.join(PATHS.logs, "products", productId, "err.log");
+    96→}
+    97→
+    98→/* ─────────────────────────── logs con rotación ─────────────────────────── */
+    99→
+   100→function rotateLog(file: string): number {
+   101→  try {
+   102→    fs.mkdirSync(path.dirname(file), { recursive: true });
+   103→    if (!fs.existsSync(file)) return fs.openSync(file, "a");
+   104→    if (fs.statSync(file).size < LOG_ROTATE_BYTES) return fs.openSync(file, "a");
+   105→    // out.log.2 → .3, .1 → .2, out.log → .1 (conserva LOG_KEEP generaciones)
+   106→    for (let i = LOG_KEEP - 1; i >= 1; i--) {
+   107→      const from = `${file}.${i}`;
+   108→      const to = `${file}.${i + 1}`;
+   109→      if (fs.existsSync(from)) fs.renameSync(from, to);
+   110→    }
+   111→    fs.renameSync(file, `${file}.1`);
+   112→    return fs.openSync(file, "a");
+   113→  } catch {
+   114→    try {
+   115→      return fs.openSync(file, "a");
+   116→    } catch {
+   117→      return -1;
+   118→    }
+   119→  }
+   120→}
+   121→
+   122→export function tailFileSafe(file: string, maxBytes = ERR_TAIL_BYTES): string | undefined {
+   123→  try {
+   124→    if (!fs.existsSync(file)) return undefined;
+   125→    const size = fs.statSync(file).size;
+   126→    const start = Math.max(0, size - maxBytes);
+   127→    const fd = fs.openSync(file, "r");
+   128→    const buf = Buffer.alloc(size - start);
+   129→    fs.readSync(fd, buf, 0, buf.length, start);
+   130→    fs.closeSync(fd);
+   131→    return buf.toString("utf-8").slice(-maxBytes);
+   132→  } catch {
+   133→    return undefined;
+   134→  }
+   135→}
+   136→
+   137→/* ─────────────────────────── pidfile (identidad) ─────────────────────────── */
+   138→
+   139→export function writePidFile(productId: string, identity: ProcessIdentity): void {
+   140→  writeFileAtomic(pidFile(productId), JSON.stringify(identity, null, 2));
+   141→}
+   142→export function readPidFile(productId: string): ProcessIdentity | null {
+   143→  try {
+   144→    const raw = fs.readFileSync(pidFile(productId), "utf-8");
+   145→    const id = JSON.parse(raw) as ProcessIdentity;
+   146→    if (!id || typeof id.pid !== "number" || !id.bootToken) return null;
+   147→    return id;
+   148→  } catch {
+   149→    return null;
+   150→  }
+   151→}
+   152→export function removePidFile(productId: string): void {
+   153→  try {
+   154→    fs.rmSync(pidFile(productId), { force: true });
+   155→  } catch {
+   156→    /* noop */
+   157→  }
+   158→}
+   159→
+   160→/* ─────────────────────────── liveness + identidad ─────────────────────────── */
+   161→
+   162→/** ¿Existe el proceso? (señal 0). EPERM cuenta como vivo (otro usuario). */
+   163→export function isAlive(pid: number): boolean {
+   164→  if (!Number.isFinite(pid) || pid <= 0) return false;
+   165→  try {
+   166→    process.kill(pid, 0);
+   167→    return true;
+   168→  } catch (e) {
+   169→    const err = e as NodeJS.ErrnoException;
+   170→    if (err.code === "EPERM") return true;
+   171→    return false; // ESRCH → no existe
+   172→  }
+   173→}
+   174→
+   175→/** Lee la línea de comandos real del PID para verificar que es NUESTRO proceso. */
+   176→async function processCommandLine(pid: number): Promise<string | null> {
+   177→  if (process.platform === "win32") {
+   178→    // UNTESTED_ON_SANDBOX — implementado según API nativa de Windows (PowerShell/CIM)
+   179→    try {
+   180→      const stdout = await new Promise<string>((resolve, reject) => {
+   181→        execFile(
+   182→          "powershell.exe",
+   183→          ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
+   184→          { timeout: 5000 },
+   185→          (e, out) => (e ? reject(e) : resolve(String(out ?? ""))),
+   186→        );
+   187→      });
+   188→      return stdout.trim() || null;
+   189→    } catch {
+   190→      return null;
+   191→    }
+   192→  }
+   193→  try {
+   194→    const raw = fs.readFileSync(`/proc/${pid}/cmdline`);
+   195→    return raw.toString("utf-8").replace(/\0/g, " ").trim() || null;
+   196→  } catch {
+   197→    return null;
+   198→  }
+   199→}
+   200→
+   201→/**
+   202→ * Verifica que el PID corresponde al producto esperado y a la instancia que
+   203→ * ALBRA creó (entryPath del pidfile + marcador del runtime + productId).
+   204→ */
+   205→export async function verifyProcessIdentity(
+   206→  identity: ProcessIdentity,
+   207→): Promise<{ ok: boolean; commandLine?: string; reason?: string }> {
+   208→  if (!isAlive(identity.pid)) return { ok: false, reason: "PROCESS_NOT_FOUND" };
+   209→  const cmd = await processCommandLine(identity.pid);
+   210→  if (cmd === null) {
+   211→    // Sin /proc ni CIM no podemos verificar la línea de comando.
+   212→    // Degradación documentada: se acepta el pidfile como evidencia débil.
+   213→    return { ok: true, reason: "CMDLINE_UNAVAILABLE" };
+   214→  }
+   215→  const entryBase = path.basename(identity.entryPath);
+   216→  const ok =
+   217→    cmd.includes(entryBase) &&
+   218→    cmd.includes(identity.productId) &&
+   219→    (cmd.includes("ALBRA-PRODUCT-RUNTIME") || cmd.includes(entryBase));
+   220→  return ok ? { ok: true, commandLine: cmd } : { ok: false, commandLine: cmd, reason: "IDENTITY_MISMATCH" };
+   221→}
+   222→
+   223→/* ─────────────────────────── arranque real ─────────────────────────── */
+   224→
+   225→/** Genera un entrypoint: execPath del INSTALADOR (bun/node) + product.js. */
+   226→function resolveExecPath(): string {
+   227→  return process.execPath || "node";
+   228→}
+   229→
+   230→/**
+   231→ * Inicia el proceso REAL del producto.
+   232→ * - Sin shell: argv estructurado (nunca concatenación de strings).
+   233→ * - Env allowlist estricto (sin secretos del INSTALADOR).
+   234→ * - detached: el producto sobrevive reinicios del INSTALADOR (huérfano recuperable).
+   235→ * - stdout/stderr → logs rotativos.
+   236→ */
+   237→export function spawnProductProcess(opts: {
+   238→  productId: string;
+   239→  version: string;
+   240→  port: number;
+   241→  appDir?: string;
+   242→}): { ok: true; pid: number; bootToken: string; port: number } | { ok: false; error: string; detail?: string } {
+   243→  const { productId, version, port } = opts;
+   244→  const appDir = opts.appDir ?? productAppDir(productId);
+   245→  const entryPath = path.join(appDir, "product.js");
+   246→
+   247→  if (!fs.existsSync(entryPath)) {
+   248→    return { ok: false, error: "ENTRYPOINT_MISSING", detail: `No existe ${entryPath}` };
+   249→  }
+   250→  const entrySource = (() => {
+   251→    try {
+   252→      return fs.readFileSync(entryPath, "utf-8");
+   253→    } catch {
+   254→      return "";
+   255→    }
+   256→  })();
+   257→  if (!entrySource.includes("ALBRA-PRODUCT-RUNTIME")) {
+   258→    return {
+   259→      ok: false,
+   260→      error: "PRODUCT_RUNTIME_OUTDATED",
+   261→      detail: "El entrypoint instalado no es un runtime ALBRA instrumentado. Ejecuta una actualización o reparación del producto.",
+   262→    };
+   263→  }
+   264→
+   265→  const bootToken = crypto.randomBytes(24).toString("hex");
+   266→  const outFd = rotateLog(outLog(productId));
+   267→  const errFd = rotateLog(errLog(productId));
+   268→
+   269→  const envAllowlist: NodeJS.ProcessEnv = {
+   270→    ALBRA_PRODUCT_ID: productId,
+   271→    ALBRA_PRODUCT_VERSION: version,
+   272→    ALBRA_PORT: String(port),
+   273→    ALBRA_BOOT_TOKEN: bootToken,
+   274→    ALBRA_DATA_DIR: path.join(PATHS.products, productId, "data"),
+   275→    ALBRA_RUNTIME_DIR: runtimeDir(productId),
+   276→    ALBRA_LOG_DIR: path.join(PATHS.logs, "products", productId),
+   277→    NODE_ENV: "production",
+   278→    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+   279→    HOME: process.env.HOME ?? os.homedir(),
+   280→    TMPDIR: process.env.TMPDIR ?? os.tmpdir(),
+   281→    LANG: process.env.LANG ?? "en_US.UTF-8",
+   282→  };
+   283→  if (process.platform === "win32") envAllowlist.TMP = process.env.TMP ?? os.tmpdir();
+   284→
+   285→  fs.mkdirSync(runtimeDir(productId), { recursive: true });
+   286→  // limpieza de evidencias de la instancia anterior
+   287→  try {
+   288→    fs.rmSync(exitFile(productId), { force: true });
+   289→    fs.rmSync(heartbeatFile(productId), { force: true });
+   290→  } catch {
+   291→    /* noop */
+   292→  }
+   293→
+   294→  let child: ReturnType<typeof spawn>;
+   295→  try {
+   296→    child = spawn(resolveExecPath(), [entryPath, "--port", String(port)], {
+   297→      cwd: appDir,
+   298→      env: envAllowlist,
+   299→      detached: true,
+   300→      stdio: ["ignore", outFd >= 0 ? outFd : "ignore", errFd >= 0 ? errFd : "ignore"],
+   301→      windowsHide: true,
+   302→    });
+   303→  } catch (e) {
+   304→    return { ok: false, error: "SPAWN_FAILED", detail: (e as Error).message };
+   305→  }
+   306→  // el padre cierra sus copias de los fds (el hijo conserva los suyos)
+   307→  for (const fd of [outFd, errFd]) {
+   308→    if (fd >= 0) {
+   309→      try {
+   310→        fs.closeSync(fd);
+   311→      } catch {
+   312→        /* noop */
+   313→      }
+   314→    }
+   315→  }
+   316→  if (!child.pid) {
+   317→    return { ok: false, error: "SPAWN_FAILED", detail: "El sistema no devolvió un PID" };
+   318→  }
+   319→  child.unref();
+   320→
+   321→  const identity: ProcessIdentity = {
+   322→    pid: child.pid,
+   323→    bootToken,
+   324→    port,
+   325→    productId,
+   326→    version,
+   327→    startedAt: new Date().toISOString(),
+   328→    entryPath,
+   329→    execPath: resolveExecPath(),
+   330→    platform: process.platform,
+   331→  };
+   332→  writePidFile(productId, identity);
+   333→  return { ok: true, pid: child.pid, bootToken, port };
+   334→}
+   335→
+   336→/** GET /health autenticado con cross-check del PID devuelto. */
+   337→export async function probeHealth(
+   338→  port: number,
+   339→  bootToken: string,
+   340→  expectPid?: number,
+   341→  timeoutMs = 2500,
+   342→): Promise<{ ok: boolean; status?: number; body?: Record<string, unknown>; error?: string; latencyMs?: number }> {
+   343→  const started = Date.now();
+   344→  try {
+   345→    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+   346→      headers: { "x-albra-token": bootToken },
+   347→      signal: AbortSignal.timeout(timeoutMs),
+   348→    });
+   349→    const latencyMs = Date.now() - started;
+   350→    if (res.status !== 200) {
+   351→      return { ok: false, status: res.status, error: `HTTP ${res.status}`, latencyMs };
+   352→    }
+   353→    const body = (await res.json()) as Record<string, unknown>;
+   354→    if (!body || body.ok !== true || body.state !== "RUNNING") {
+   355→      return { ok: false, status: res.status, body, error: "RESPUESTA_INVALIDA", latencyMs };
+   356→    }
+   357→    if (expectPid !== undefined && Number(body.pid) !== expectPid) {
+   358→      return { ok: false, status: res.status, body, error: "PID_MISMATCH", latencyMs };
+   359→    }
+   360→    return { ok: true, status: res.status, body, latencyMs };
+   361→  } catch (e) {
+   362→    return { ok: false, error: (e as Error).name === "TimeoutError" ? "HEALTH_TIMEOUT" : (e as Error).message };
+   363→  }
+   364→}
+   365→
+   366→/** Espera activa hasta que /health responde 200 autenticado y el proceso sigue vivo. */
+   367→export async function waitUntilHealthy(
+   368→  productId: string,
+   369→  timeoutMs = HEALTH_TIMEOUT_MS,
+   370→): Promise<{ ok: boolean; error?: string; detail?: string; latencyMs?: number }> {
+   371→  const identity = readPidFile(productId);
+   372→  if (!identity) return { ok: false, error: "PIDFILE_MISSING" };
+   373→  const deadline = Date.now() + timeoutMs;
+   374→  let last = "";
+   375→  while (Date.now() < deadline) {
+   376→    if (!isAlive(identity.pid)) {
+   377→      return {
+   378→        ok: false,
+   379→        error: "PROCESS_EXITED_DURING_START",
+   380→        detail: tailFileSafe(errLog(productId)) ?? "sin stderr",
+   381→      };
+   382→    }
+   383→    const probe = await probeHealth(identity.port, identity.bootToken, identity.pid);
+   384→    if (probe.ok) return { ok: true, latencyMs: probe.latencyMs };
+   385→    last = probe.error ?? "unknown";
+   386→    await new Promise(r => setTimeout(r, HEALTH_POLL_MS));
+   387→  }
+   388→  return {
+   389→    ok: false,
+   390→    error: "START_TIMEOUT",
+   391→    detail: `Último error: ${last}. ${tailFileSafe(errLog(productId)) ?? ""}`.trim(),
+   392→  };
+   393→}
+   394→
+   395→/* ─────────────────────────── parada real ─────────────────────────── */
+   396→
+   397→export interface StopResult {
+   398→  stopped: boolean;
+   399→  forced: boolean;
+   400→  evidence: string;
+   401→  error?: string;
+   402→}
+   403→
+   404→/** Detiene el proceso con estrategia ordenada → timeout → forzada. */
+   405→export async function stopProductProcess(
+   406→  productId: string,
+   407→  opts: { timeoutMs?: number; force?: boolean } = {},
+   408→): Promise<StopResult> {
+   409→  const timeoutMs = opts.timeoutMs ?? STOP_TIMEOUT_MS;
+   410→  const identity = readPidFile(productId);
+   411→
+   412→  if (!identity) {
+   413→    return { stopped: true, forced: false, evidence: "SIN_PIDFILE (no había proceso registrado)" };
+   414→  }
+   415→  if (!isAlive(identity.pid)) {
+   416→    removePidFile(productId);
+   417→    return { stopped: true, forced: false, evidence: "El proceso ya no existía (PID " + identity.pid + ")" };
+   418→  }
+   419→  const v = await verifyProcessIdentity(identity);
+   420→  if (!v.ok && v.reason === "IDENTITY_MISMATCH") {
+   421→    // SEGURIDAD: el PID no es nuestro → NO matar. Evidencia y estado UNKNOWN.
+   422→    return {
+   423→      stopped: false,
+   424→      forced: false,
+   425→      evidence: `IDENTITY_MISMATCH: PID ${identity.pid} ejecuta «${(v.commandLine ?? "").slice(0, 120)}» — no corresponde a este producto. No se terminó.`,
+   426→      error: "IDENTITY_MISMATCH",
+   427→    };
+   428→  }
+   429→
+   430→  const gracefulDeadline = Date.now() + timeoutMs;
+   431→  if (process.platform === "win32") {
+   432→    // UNTESTED_ON_SANDBOX — Windows: intento ordenado (WM_CLOSE) vía taskkill
+   433→    await new Promise<void>(resolve => {
+   434→      execFile("taskkill", ["/PID", String(identity.pid)], { timeout: 5000 }, () => resolve());
+   435→    });
+   436→  } else {
+   437→    try {
+   438→      process.kill(identity.pid, "SIGTERM");
+   439→    } catch {
+   440→      /* ya murió */
+   441→    }
+   442→  }
+   443→
+   444→  while (Date.now() < gracefulDeadline && isAlive(identity.pid)) {
+   445→    await new Promise(r => setTimeout(r, 300));
+   446→  }
+   447→
+   448→  let forced = false;
+   449→  if (isAlive(identity.pid)) {
+   450→    forced = true;
+   451→    if (process.platform === "win32") {
+   452→      await new Promise<void>(resolve => {
+   453→        execFile("taskkill", ["/PID", String(identity.pid), "/T", "/F"], { timeout: 5000 }, () => resolve());
+   454→      });
+   455→    } else {
+   456→      try {
+   457→        process.kill(identity.pid, "SIGKILL");
+   458→      } catch {
+   459→        /* noop */
+   460→      }
+   461→    }
+   462→    // espera corta a que el SO libere
+   463→    for (let i = 0; i < 10 && isAlive(identity.pid); i++) {
+   464→      await new Promise(r => setTimeout(r, 200));
+   465→    }
+   466→  }
+   467→
+   468→  const stillAlive = isAlive(identity.pid);
+   469→  const exitReason = readExitReason(productId);
+   470→  removePidFile(productId);
+   471→  if (stillAlive) {
+   472→    return {
+   473→      stopped: false,
+   474→      forced,
+   475→      evidence: `El proceso ${identity.pid} NO respondió a SIGTERM ni SIGKILL verificable`,
+   476→      error: "STOP_FAILED",
+   477→    };
+   478→  }
+   479→  return {
+   480→    stopped: true,
+   481→    forced,
+   482→    evidence: exitReason
+   483→      ? `Salida ordenada (${exitReason})${forced ? " tras timeout" : ""}`
+   484→      : forced
+   485→        ? "Terminado con señal forzada tras timeout"
+   486→        : "Proceso terminado y verificado (PID ya no existe)",
+   487→  };
+   488→}
+   489→
+   490→function readExitReason(productId: string): string | null {
+   491→  try {
+   492→    const raw = fs.readFileSync(exitFile(productId), "utf-8");
+   493→    const j = JSON.parse(raw) as { reason?: string; at?: string };
+   494→    return j.reason ? `${j.reason}${j.at ? ` @ ${j.at}` : ""}` : null;
+   495→  } catch {
+   496→    return null;
+   497→  }
+   498→}
+   499→
+   500→/* ─────────────────────────── estado real (fuente de verdad: el SO) ─────────────────────────── */
+   501→
+   502→export async function readRuntimeState(productId: string, dbSaysRunning?: boolean): Promise<{
+   503→  osState: RuntimeOsState;
+   504→  identity: ProcessIdentity | null;
+   505→  evidence: RuntimeEvidence;
+   506→}> {
+   507→  const identity = readPidFile(productId);
+   508→  const errTail = tailFileSafe(errLog(productId));
+   509→  const hb = readHeartbeat(productId);
+   510→
+   511→  if (!identity) {
+   512→    const aliveUnknown = false;
+   513→    return {
+   514→      osState: dbSaysRunning ? "LOST" : "STOPPED",
+   515→      identity: null,
+   516→      evidence: {
+   517→        osState: dbSaysRunning ? "LOST" : "STOPPED",
+   518→        errLogTail: errTail,
+   519→        lastHeartbeatAt: hb?.at,
+   520→        identityVerified: !aliveUnknown,
+   521→      },
+   522→    };
+   523→  }
+   524→  const alive = isAlive(identity.pid);
+   525→  const uptimeS = alive ? Math.floor((Date.now() - new Date(identity.startedAt).getTime()) / 1000) : undefined;
+   526→
+   527→  if (!alive) {
+   528→    const exitReason = readExitReason(productId);
+   529→    const osState: RuntimeOsState = exitReason ? "EXITED_CLEAN" : "CRASHED";
+   530→    return {
+   531→      osState,
+   532→      identity,
+   533→      evidence: {
+   534→        osState,
+   535→        pid: identity.pid,
+   536→        port: identity.port,
+   537→        startedAt: identity.startedAt,
+   538→        exitReason: exitReason ?? undefined,
+   539→        errLogTail: errTail,
+   540→        lastHeartbeatAt: hb?.at,
+   541→      },
+   542→    };
+   543→  }
+   544→  const v = await verifyProcessIdentity(identity);
+   545→  const osState: RuntimeOsState = v.ok ? (dbSaysRunning ? "RUNNING" : "ORPHAN_RUNNING") : "UNKNOWN";
+   546→  return {
+   547→    osState,
+   548→    identity,
+   549→    evidence: {
+   550→      osState,
+   551→      pid: identity.pid,
+   552→      port: identity.port,
+   553→      startedAt: identity.startedAt,
+   554→      uptimeS,
+   555→      identityVerified: v.ok,
+   556→      errLogTail: errTail,
+   557→      lastHeartbeatAt: hb?.at,
+   558→    },
+   559→  };
+   560→}
+   561→
+   562→function readHeartbeat(productId: string): { at?: string; pid?: number } | null {
+   563→  try {
+   564→    return JSON.parse(fs.readFileSync(heartbeatFile(productId), "utf-8")) as { at?: string; pid?: number };
+   565→  } catch {
+   566→    return null;
+   567→  }
+   568→}
+   569→
+   570→/** ¿El puerto está realmente siendo servido por alguien? */
+   571→export function isPortServing(port: number, timeoutMs = 1200): Promise<boolean> {
+   572→  return new Promise(resolve => {
+   573→    const socket = net.createConnection({ port, host: "127.0.0.1" });
+   574→    const done = (v: boolean) => {
+   575→      socket.destroy();
+   576→      resolve(v);
+   577→    };
+   578→    socket.setTimeout(timeoutMs);
+   579→    socket.once("connect", () => done(true));
+   580→    socket.once("timeout", () => done(false));
+   581→    socket.once("error", () => done(false));
+   582→  });
+   583→}
+   584→
+   585→/* ─────────────────────────── reconciliación ─────────────────────────── */
+   586→
+   587→export interface ReconcileResult {
+   588→  productId: string;
+   589→  before: string | null; // estado en DB
+   590→  after: string; // estado final en DB
+   591→  osState: RuntimeOsState;
+   592→  changed: boolean;
+   593→  evidence: string;
+   594→}
+   595→
+   596→/**
+   597→ * Reconcilia el estado persistido con el estado REAL del sistema operativo
+   598→ * para un producto. Nunca mata procesos que no puede verificar como propios.
+   599→ */
+   600→export async function reconcileProduct(productId: string, dbRow: {
+   601→  state: string;
+   602→  pid: number | null;
+   603→  port: number | null;
+   604→}): Promise<ReconcileResult> {
+   605→  const { readRuntimeState } = await import("@/lib/albra/core/process-runtime");
+   606→  const rs = await readRuntimeState(productId, dbRow.state === "RUNNING");
+   607→  const { db } = await import("@/lib/db");
+   608→  const { audit } = await import("@/lib/albra/core/audit");
+   609→
+   610→  const update = async (data: Record<string, unknown>) => {
+   611→    await db.installedProduct.update({ where: { productId }, data });
+   612→  };
+   613→
+   614→  switch (rs.osState) {
+   615→    case "RUNNING": {
+   616→      // coherente: DB RUNNING + proceso vivo verificado → refrescar pid/puerto
+   617→      if (dbRow.state !== "RUNNING" || dbRow.pid !== rs.identity!.pid) {
+   618→        await update({
+   619→          state: "RUNNING",
+   620→          pid: rs.identity!.pid,
+   621→          port: rs.identity!.port,
+   622→          bootToken: rs.identity!.bootToken,
+   623→          runtimeHandle: `pid:${rs.identity!.pid}`,
+   624→          startedAt: new Date(rs.identity!.startedAt),
+   625→        });
+   626→        return {
+   627→          productId, before: dbRow.state, after: "RUNNING", osState: rs.osState, changed: true,
+   628→          evidence: `Proceso vivo verificado (PID ${rs.identity!.pid}, puerto ${rs.identity!.port})`,
+   629→        };
+   630→      }
+   631→      return { productId, before: dbRow.state, after: "RUNNING", osState: rs.osState, changed: false, evidence: "Coherente" };
+   632→    }
+   633→    case "ORPHAN_RUNNING": {
+   634→      // huérfano recuperable: el producto sobrevivió al INSTALADOR → adoptar
+   635→      await update({
+   636→        state: "RUNNING",
+   637→        pid: rs.identity!.pid,
+   638→        port: rs.identity!.port,
+   639→        bootToken: rs.identity!.bootToken,
+   640→        runtimeHandle: `pid:${rs.identity!.pid}`,
+   641→        startedAt: new Date(rs.identity!.startedAt),
+   642→      });
+   643→      await audit({ type: "PROCESS_ADOPTED", productId, severity: "WARNING", detail: { pid: rs.identity!.pid, port: rs.identity!.port } });
+   644→      await log({ productId, channel: "USER", level: "warn", message: `Proceso huérfano recuperado (PID ${rs.identity!.pid}) tras reinicio del INSTALADOR` });
+   645→      return {
+   646→        productId, before: dbRow.state, after: "RUNNING", osState: rs.osState, changed: true,
+   647→        evidence: `Huérfano adoptado: proceso vivo verificado (PID ${rs.identity!.pid})`,
+   648→      };
+   649→    }
+   650→    case "CRASHED": {
+   651→      const evidence = JSON.stringify({
+   652→        type: "UNEXPECTED_EXIT",
+   653→        at: new Date().toISOString(),
+   654→        pid: rs.identity?.pid,
+   655→        errTail: (rs.evidence.errLogTail ?? "").slice(-1024),
+   656→      });
+   657→      await update({
+   658→        state: "FAILED",
+   659→        health: "FAILED",
+   660→        pid: null,
+   661→        bootToken: null,
+   662→        lastExitEvidence: evidence,
+   663→        stoppedAt: new Date(),
+   664→      });
+   665→      removePidFile(productId);
+   666→      await audit({ type: "PROCESS_CRASHED", productId, severity: "CRITICAL", detail: { pid: rs.identity?.pid, errTail: (rs.evidence.errLogTail ?? "").slice(-400) } });
+   667→      await log({ productId, channel: "USER", level: "error", message: "Terminación inesperada del proceso del producto", data: { pid: rs.identity?.pid } });
+   668→      return { productId, before: dbRow.state, after: "FAILED", osState: rs.osState, changed: true, evidence: "Terminación inesperada (sin salida ordenada registrada)" };
+   669→    }
+   670→    case "EXITED_CLEAN": {
+   671→      await update({
+   672→        state: "STOPPED",
+   673→        pid: null,
+   674→        bootToken: null,
+   675→        stoppedAt: new Date(),
+   676→        lastExitEvidence: JSON.stringify({ type: "GRACEFUL_EXIT", reason: rs.evidence.exitReason }),
+   677→      });
+   678→      removePidFile(productId);
+   679→      return {
+   680→        productId, before: dbRow.state, after: "STOPPED", osState: rs.osState, changed: dbRow.state !== "STOPPED",
+   681→        evidence: `Salida ordenada (${rs.evidence.exitReason ?? "desconocida"})`,
+   682→      };
+   683→    }
+   684→    case "LOST": {
+   685→      await update({
+   686→        state: "STOPPED",
+   687→        pid: null,
+   688→        bootToken: null,
+   689→        stoppedAt: new Date(),
+   690→        lastExitEvidence: JSON.stringify({ type: "LOST", at: new Date().toISOString() }),
+   691→      });
+   692→      await audit({ type: "PROCESS_LOST", productId, severity: "WARNING", detail: {} });
+   693→      return { productId, before: dbRow.state, after: "STOPPED", osState: rs.osState, changed: true, evidence: "DB decía RUNNING pero no hay pidfile ni proceso" };
+   694→    }
+   695→    case "UNKNOWN": {
+   696→      return { productId, before: dbRow.state, after: dbRow.state, osState: rs.osState, changed: false, evidence: `Estado del SO no determinable (identity=${rs.evidence.identityVerified})` };
+   697→    }
+   698→    case "STOPPED":
+   699→    default: {
+   700→      if (dbRow.state === "RUNNING" || dbRow.state === "DEGRADED") {
+   701→        await update({ state: "STOPPED", pid: null, bootToken: null, stoppedAt: new Date() });
+   702→        return { productId, before: dbRow.state, after: "STOPPED", osState: "STOPPED", changed: true, evidence: "Sin proceso real; DB corregida" };
+   703→      }
+   704→      return { productId, before: dbRow.state, after: dbRow.state, osState: "STOPPED", changed: false, evidence: "Detenido (coherente)" };
+   705→    }
+   706→  }
+   707→}
+   708→
+   709→/** Reconcilia TODOS los productos instalados. Idempotente, nunca lanza. */
+   710→export async function reconcileAll(): Promise<ReconcileResult[]> {
+   711→  const { db } = await import("@/lib/db");
+   712→  const rows = await db.installedProduct.findMany();
+   713→  const results: ReconcileResult[] = [];
+   714→  for (const row of rows) {
+   715→    try {
+   716→      results.push(await reconcileProduct(row.productId, { state: row.state, pid: row.pid, port: row.port }));
+   717→    } catch (e) {
+   718→      await log({ productId: row.productId, channel: "SYSTEM", level: "error", message: `Reconciliación falló: ${(e as Error).message}` });
+   719→    }
+   720→  }
+   721→  return results;
+   722→}
+   723→

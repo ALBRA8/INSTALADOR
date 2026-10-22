@@ -9,7 +9,7 @@ import { CATALOG, getLatestVersion } from "@/lib/albra/products/catalog";
 import { listInstalled, isLocked } from "@/lib/albra/core/registry";
 import { db } from "@/lib/db";
 import { errorResponse, semverGt } from "@/lib/albra/api-serialize";
-import type { CatalogItem, LifecycleStateDTO } from "@/lib/albra/api-types";
+import type { CatalogItem, ExitEvidenceDTO, LifecycleStateDTO } from "@/lib/albra/api-types";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +31,16 @@ export async function GET() {
       // (productos bloqueados sin paquete declaran su versión de referencia).
       const latestVersion = getLatestVersion(entry.productId) ?? entry.latestVersion;
 
+      // Evidencia persistida de la última salida del proceso (parseada; null si no hay)
+      const lastExitEvidence = (() => {
+        if (!inst?.lastExitEvidence) return null;
+        try {
+          return JSON.parse(inst.lastExitEvidence) as ExitEvidenceDTO;
+        } catch {
+          return null;
+        }
+      })();
+
       products.push({
         productId: entry.productId,
         displayName: entry.displayName,
@@ -47,6 +57,8 @@ export async function GET() {
         port: inst?.port ?? null,
         busy: inst ? isLocked(entry.productId) : false,
         certified: Boolean(cert?.passed),
+        pid: inst?.pid ?? null,
+        lastExitEvidence,
       });
     }
 

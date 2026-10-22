@@ -1,7 +1,13 @@
 /**
  * ALBRA API — POST /api/packages/verify
- * Body: { fileName } → { valid, reason? }
- * Verificación criptográfica de un paquete de la bóveda.
+ * Body: { fileName } → verificación criptográfica de un paquete de la bóveda.
+ *
+ * V2 TRUST CHAIN: la respuesta distingue INTEGRIDAD (valid) de AUTENTICIDAD
+ * (trustLevel + signerKeyId + reasons):
+ *   TRUSTED            → firmado por clave FULL registrada y no revocada
+ *   UNTRUSTED_SIGNER   → firma Ed25519 válida pero clave no registrada
+ *   DEV_LOCAL          → HMAC local / clave DEV (desarrollo; mostrar advertencia)
+ *   NONE               → rechazado (reason/reasons con el código exacto)
  */
 import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
@@ -27,15 +33,29 @@ export async function POST(req: Request) {
 
     const pkg = readPackageFile(fileName);
     if (!pkg) {
-      return NextResponse.json({ valid: false, reason: "PACKAGE_FILE_NOT_FOUND" });
+      return NextResponse.json({ valid: false, reason: "PACKAGE_FILE_NOT_FOUND", reasons: ["PACKAGE_FILE_NOT_FOUND"], trustLevel: "NONE" });
     }
 
     const verdict = verifyPackage(pkg);
-    return NextResponse.json(
-      verdict.valid
-        ? { valid: true }
-        : { valid: false, reason: verdict.reason },
-    );
+    if (verdict.valid) {
+      return NextResponse.json({
+        valid: true,
+        trustLevel: verdict.trustLevel,
+        reasons: verdict.reasons,
+        ...(verdict.signerKeyId ? { signerKeyId: verdict.signerKeyId } : {}),
+        packageHash: verdict.packageHash,
+        packageId: verdict.packageId,
+        version: verdict.version,
+      });
+    }
+    return NextResponse.json({
+      valid: false,
+      reason: verdict.reason,
+      reasons: verdict.reasons,
+      trustLevel: verdict.trustLevel,
+      ...(verdict.packageId ? { packageId: verdict.packageId } : {}),
+      ...(verdict.version ? { version: verdict.version } : {}),
+    });
   } catch (e) {
     return errorResponse(e);
   }

@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/albra/status-badge";
+import { RuntimeEvidencePanel } from "@/components/albra/workspace/runtime-evidence";
 import { HealthChecks } from "@/components/albra/workspace/health-checks";
 import { UpdatePanel } from "@/components/albra/workspace/update-panel";
 import { BackupsPanel } from "@/components/albra/workspace/backups-panel";
@@ -296,6 +297,9 @@ export function ProductWorkspace({
           </AlertDescription>
         </Alert>
       ) : null}
+
+      {/* ── Ejecución real: evidencia del proceso en el SO (sección 3.3) ── */}
+      <RuntimeEvidencePanel productId={productId} detail={d} />
 
       {/* ── Pestañas ── */}
       <Tabs defaultValue="resumen">

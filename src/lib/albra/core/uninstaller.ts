@@ -10,7 +10,7 @@ import fs from "fs";
 import { db } from "@/lib/db";
 import { PATHS, ensureDirs, productAppDir, productDataDir, productPreviousDir } from "@/lib/albra/env";
 import { withLock } from "@/lib/albra/core/registry";
-import { stopProduct } from "@/lib/albra/core/runtime";
+import { stopProductCore } from "@/lib/albra/core/runtime";
 import { createBackup, deleteBackupsFor } from "@/lib/albra/core/backup";
 import { deleteSecretsFor } from "@/lib/albra/core/secrets";
 import { clearProductData, exportProductData } from "@/lib/albra/products/data";
@@ -51,7 +51,7 @@ export async function runUninstall(productId: string, dataMode: DataMode, pace =
 
         await run.begin("STOP");
         await sleep(pace);
-        await stopProduct(productId);
+        await stopProductCore(productId);
         await run.done("STOP", "SUCCESS", "Servicio detenido");
 
         await run.begin("REMOVE_APPLICATION");
