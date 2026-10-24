@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import type { RunStepDTO, RunStepStatus } from "@/lib/albra/api-types";
+import { ModuleProgressBars } from "@/components/albra/module-progress";
 import { cn } from "@/lib/utils";
 
 function stepIcon(status: RunStepStatus): { Icon: LucideIcon; className: string } {
@@ -65,6 +66,16 @@ export function RunSteps({ steps, running }: { steps: RunStepDTO[]; running?: bo
                 </div>
                 {s.detail && (
                   <p className="break-words font-mono text-xs text-zinc-500">{s.detail}</p>
+                )}
+                {/* V3: barras de progreso INDEPENDIENTES por módulo (runtime /
+                    dependencia / archivos) mientras el paso está activo. */}
+                {s.units && s.units.length > 0 && (
+                  <div className="mt-2">
+                    <ModuleProgressBars
+                      units={s.units}
+                      title={s.status === "RUNNING" ? "Módulos en instalación" : "Módulos"}
+                    />
+                  </div>
                 )}
               </div>
             </li>

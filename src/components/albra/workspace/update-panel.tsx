@@ -23,6 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { RunSteps } from "@/components/albra/run-steps";
+import { AccessKeyField } from "@/components/albra/access-key-field";
 import { api, ApiError, useRunPolling } from "@/hooks/use-albra";
 import type { LifecycleRunDTO, ProductDetail } from "@/lib/albra/api-types";
 
@@ -32,6 +33,8 @@ export function UpdatePanel({ detail, onDone }: { detail: ProductDetail; onDone:
   const [targetVersion, setTargetVersion] = useState<string>("");
   const [injectFailure, setInjectFailure] = useState<boolean>(false);
   const [failureKind, setFailureKind] = useState<string>("MIGRATION");
+  // V3: clave única de acceso — obligatoria para descargar el paquete de actualización
+  const [accessKey, setAccessKey] = useState<string>("");
   const [runId, setRunId] = useState<string | null>(null);
   const [posting, setPosting] = useState<boolean>(false);
   const modeRef = useRef<RunMode>("update");
@@ -67,11 +70,18 @@ export function UpdatePanel({ detail, onDone }: { detail: ProductDetail; onDone:
       toast.warning("Elige la versión de destino");
       return;
     }
+    if (accessKey.trim().length === 0) {
+      toast.error("Introduce la clave única de acceso del proyecto: se valida vía API externa antes de descargar el paquete.");
+      return;
+    }
     setPosting(true);
     modeRef.current = "update";
     try {
-      const body: { targetVersion: string; injectFailure?: boolean } = { targetVersion };
-      if (injectFailure) body.injectFailure = true;
+      const body: { targetVersion: string; injectFailure?: string; accessKey: string } = {
+        targetVersion,
+        accessKey: accessKey.trim(),
+      };
+      if (injectFailure) body.injectFailure = failureKind;
       const res = await api<{ runId?: string; id?: string }>(`/api/products/${detail.productId}/update`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -177,6 +187,9 @@ export function UpdatePanel({ detail, onDone }: { detail: ProductDetail; onDone:
               </Label>
             </div>
 
+            {/* V3: PUERTA DE ACCESO — clave obligatoria antes de descargar */}
+            <AccessKeyField packageId={detail.productId} value={accessKey} onChange={setAccessKey} disabled={posting} id="update-access-key" />
+
             {injectFailure && (
               <div className="space-y-2">
                 <Label className="text-zinc-300">Tipo de fallo inyectado</Label>
@@ -280,7 +293,7 @@ export function UpdatePanel({ detail, onDone }: { detail: ProductDetail; onDone:
       </div>
 
       <p className="font-mono text-[11px] text-zinc-600">
-        El flujo es CHECK → DOWNLOAD → VERIFY → BACKUP → STAGE → STOP → SWAP → MIGRATE → START → HEALTH → COMMIT.
+        El flujo es CHECK → ACCESS → DOWNLOAD → VERIFY → BACKUP → STAGE → STOP → SWAP → MIGRATE → START → HEALTH → COMMIT.
       </p>
     </div>
   );

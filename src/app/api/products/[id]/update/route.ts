@@ -1,8 +1,10 @@
 /**
  * ALBRA API — POST /api/products/[id]/update
- * Body: { targetVersion, injectFailure? } → { runId }
+ * Body: { targetVersion, injectFailure?, accessKey } → { runId }
  * injectFailure: "MIGRATION" | "START" (simulación de fallos para demo
- * de rollback automático). Corre en background (Run observable).
+ * de rollback automático). V3: accessKey OBLIGATORIA — el paso ACCESS del
+ * updater la valida vía API externa antes de descargar el paquete.
+ * Corre en background (Run observable).
  */
 import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
@@ -27,7 +29,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       );
     }
 
-    const body = await readJson<{ targetVersion?: unknown; injectFailure?: unknown }>(req);
+    const body = await readJson<{ targetVersion?: unknown; injectFailure?: unknown; accessKey?: unknown }>(req);
     const targetVersion = body?.targetVersion;
     if (!targetVersion || typeof targetVersion !== "string" || targetVersion.trim().length === 0) {
       throw new ApiError(
@@ -43,7 +45,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       injectFailure = body.injectFailure;
     }
 
-    const { runId } = await runUpdate(id, targetVersion.trim(), injectFailure);
+    const accessKey = typeof body?.accessKey === "string" ? body.accessKey : "";
+    const { runId } = await runUpdate(id, targetVersion.trim(), injectFailure, 200, { accessKey });
     return NextResponse.json({ runId });
   } catch (e) {
     return errorResponse(e);

@@ -19,6 +19,8 @@ export const PATHS = {
   keys: path.join(ALBRA_ROOT, "keys"),
   logs: path.join(ALBRA_ROOT, "logs"),
   downloads: path.join(ALBRA_ROOT, "downloads"),
+  /** Registro de claves de acceso emitidas por el servicio de licenciamiento. */
+  access: path.join(ALBRA_ROOT, "access"),
 };
 
 export function ensureDirs(): void {

@@ -66,6 +66,21 @@ export interface RunStepDTO {
   detail?: string;
   at?: string;
   durationMs?: number;
+  /** V3: módulos del paso — cada uno con SU barra de progreso independiente. */
+  units?: RunUnitDTO[];
+}
+
+/** Módulo observable dentro de un paso (runtime/dependencia/archivos…). */
+export interface RunUnitDTO {
+  id: string;
+  label: string;
+  kind: "runtime" | "dependency" | "files" | "module";
+  status: RunStepStatus;
+  /** Progreso 0–100 del módulo. */
+  progress: number;
+  detail?: string;
+  at?: string;
+  durationMs?: number;
 }
 
 export interface LifecycleRunDTO {
@@ -105,6 +120,10 @@ export interface CatalogItem {
   pid: number | null;
   /** Evidencia persistida de la última salida del proceso (parseada; null si no hay). */
   lastExitEvidence: ExitEvidenceDTO | null;
+  /** V3: progreso global (0–99) de la operación activa; null si no hay operación. */
+  progress: number | null;
+  /** V3: etiqueta de la operación activa (p. ej. "Instalando"), null si no hay. */
+  progressLabel: string | null;
 }
 
 // ───────────── Detalle de producto ─────────────

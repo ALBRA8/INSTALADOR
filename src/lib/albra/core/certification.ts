@@ -18,6 +18,7 @@ import { executeRepair } from "@/lib/albra/core/repair";
 import { awaitRun, getRun, registerRunPromise } from "@/lib/albra/core/runs";
 import { audit } from "@/lib/albra/core/audit";
 import { log } from "@/lib/albra/core/logger";
+import { getOrCreateServiceKey } from "@/lib/albra/core/access-key";
 
 export interface CertStepResult {
   step: string;
@@ -88,7 +89,9 @@ export async function runCertification(productId = "crm", pace = 60): Promise<{ 
     let ok = results.every(r => r.status === "PASS");
 
     if (ok) ok = await record("INSTALL", "Instalación transaccional", async () => {
-      const { runId } = await runInstall(productId, { paceMs: pace });
+      // V3: la puerta de acceso aplica también a la certificación (sin bypass):
+      // usa la clave de SERVICIO emitida en el bootstrap, validada por la API externa.
+      const { runId } = await runInstall(productId, { paceMs: pace, accessKey: await getOrCreateServiceKey() });
       const st = await awaitRunStatus(runId);
       if (st.status !== "SUCCESS") throw new Error(st.error ?? "INSTALL_FAILED");
       return "Instalado con commit transaccional";
@@ -130,7 +133,7 @@ export async function runCertification(productId = "crm", pace = 60): Promise<{ 
     });
 
     if (ok) ok = await record("UPDATE", "Actualización a 1.1.0", async () => {
-      const { runId } = await runUpdate(productId, "1.1.0", null, pace);
+      const { runId } = await runUpdate(productId, "1.1.0", null, pace, { accessKey: await getOrCreateServiceKey() });
       const st = await awaitRunStatus(runId);
       if (st.status !== "SUCCESS") throw new Error(st.error ?? "UPDATE_FAILED");
       return "v1.1.0 commitada";
@@ -184,7 +187,7 @@ export async function runCertification(productId = "crm", pace = 60): Promise<{ 
     });
 
     if (ok) ok = await record("CLEANROOM", "Clean-room: reinstalación desde cero", async () => {
-      const { runId } = await runInstall(productId, { paceMs: pace });
+      const { runId } = await runInstall(productId, { paceMs: pace, accessKey: await getOrCreateServiceKey() });
       const st = await awaitRunStatus(runId);
       if (st.status !== "SUCCESS") throw new Error(st.error ?? "CLEANROOM_INSTALL_FAILED");
       return "Reinstalado sin estado previo";

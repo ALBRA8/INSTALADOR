@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
   DialogContent,
@@ -20,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { RunSteps } from "@/components/albra/run-steps";
+import { AccessKeyField } from "@/components/albra/access-key-field";
 import { ApiError, api, useRunPolling } from "@/hooks/use-albra";
 import type {
   CatalogItem,
@@ -62,6 +64,8 @@ export function InstallWizard({
   const [runId, setRunId] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [finished, setFinished] = useState<LifecycleRunDTO | null>(null);
+  // V3: clave única de acceso — obligatoria para descargar el paquete.
+  const [accessKey, setAccessKey] = useState("");
 
   const productId = item?.productId ?? null;
 
@@ -74,6 +78,7 @@ export function InstallWizard({
     setRunId(null);
     setInstalling(false);
     setFinished(null);
+    setAccessKey("");
     let cancelled = false;
     api<PreflightReportDTO>("/api/preflight", {
       method: "POST",
@@ -95,11 +100,16 @@ export function InstallWizard({
 
   const startInstall = async () => {
     if (!item) return;
+    // V3: la clave es obligatoria (la valida la API externa antes del DOWNLOAD).
+    if (accessKey.trim().length === 0) {
+      toast.error("Introduce la clave única de acceso del proyecto para continuar.");
+      return;
+    }
     setInstalling(true);
     try {
       const res = await api<InstallStartResponse>("/api/install", {
         method: "POST",
-        body: JSON.stringify({ packageId: item.productId }),
+        body: JSON.stringify({ packageId: item.productId, accessKey: accessKey.trim() }),
       });
       const id = res.runId ?? res.id ?? res.run?.id ?? null;
       if (!id) throw new ApiError(500, "NO_RUN", "El instalador no devolvió un run válido.");
@@ -113,7 +123,9 @@ export function InstallWizard({
     }
   };
 
-  const run = useRunPolling(phase === "running" ? runId : null, undefined, (finishedRun) => {
+  // FIX: el run se mantiene tras finalizar (el hook se autodetiene con finishedAt);
+  // anular runId al pasar a "done" borraba el estado y marcaba SUCCESS como fallo.
+  const run = useRunPolling(runId, undefined, (finishedRun) => {
     setFinished(finishedRun);
     setPhase("done");
     if (finishedRun.status === "SUCCESS") {
@@ -123,7 +135,16 @@ export function InstallWizard({
 
   const ok = preflight?.ok === true;
   const runFinished = phase === "running" ? run?.finishedAt != null : false;
-  const runSuccess = run?.status === "SUCCESS";
+  const runSuccess = (finished ?? run)?.status === "SUCCESS";
+
+  // V3: progreso GLOBAL del run (pasos cerrados + mitad del paso activo).
+  const overallProgress = (() => {
+    const steps = run?.steps ?? [];
+    if (steps.length === 0) return 0;
+    const done = steps.filter(s => s.status === "SUCCESS" || s.status === "WARNING" || s.status === "SKIPPED" || s.status === "FAILURE").length;
+    const running = steps.some(s => s.status === "RUNNING");
+    return Math.min(99, Math.round(((done + (running ? 0.5 : 0)) / steps.length) * 100));
+  })();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -229,12 +250,25 @@ export function InstallWizard({
                 </span>
               </div>
             </div>
+            {/* V3: PUERTA DE ACCESO — clave obligatoria antes de descargar */}
+            <AccessKeyField packageId={item.productId} value={accessKey} onChange={setAccessKey} disabled={installing} />
           </div>
         )}
 
         {/* ── Fase: running ── */}
         {phase === "running" && (
-          <div className="min-h-24 rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+          <div className="min-h-24 space-y-3 rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+            {/* V3: progreso global de la instalación */}
+            <div className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Progreso de la instalación
+                </span>
+                <span className="font-mono text-xs tabular-nums text-emerald-400">{overallProgress}%</span>
+              </div>
+              <Progress value={overallProgress} aria-label="Progreso global de la instalación" className="h-2 bg-zinc-800 [&>[data-slot=progress-indicator]]:bg-emerald-500" />
+            </div>
+            {/* V3: cada módulo (runtime/dependencia/archivos) con SU barra */}
             <RunSteps steps={run?.steps ?? []} running={!runFinished} />
           </div>
         )}

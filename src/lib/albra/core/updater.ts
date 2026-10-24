@@ -25,9 +25,12 @@ import { importProductData } from "@/lib/albra/products/data";
 import { Run, sleep, registerRunPromise } from "@/lib/albra/core/runs";
 import { audit } from "@/lib/albra/core/audit";
 import { log } from "@/lib/albra/core/logger";
+// V3: PUERTA DE ACCESO — validación obligatoria antes de descargar el paquete
+import { validateProjectAccessKey } from "@/lib/albra/core/access-key";
 
 const STEP_DEFS = [
   { step: "CHECK", label: "Comprobando actualización disponible" },
+  { step: "ACCESS", label: "Validando clave única de acceso (API externa)" },
   { step: "DOWNLOAD", label: "Descargando paquete" },
   { step: "VERIFY", label: "Verificando hash y firma" },
   { step: "BACKUP", label: "Copia de seguridad previa" },
@@ -53,7 +56,7 @@ function semverLt(a: string, b: string): boolean {
   return a3 < b3;
 }
 
-export async function runUpdate(productId: string, targetVersion: string, injectFailure: InjectFailure = null, pace = 200): Promise<{ runId: string }> {
+export async function runUpdate(productId: string, targetVersion: string, injectFailure: InjectFailure = null, pace = 200, opts?: { accessKey?: string }): Promise<{ runId: string }> {
   const run = await Run.create("UPDATE", productId, STEP_DEFS);
   const flow = (async () => {
     const stagingDir = productStagingDir(productId, run.id);
@@ -79,6 +82,19 @@ export async function runUpdate(productId: string, targetVersion: string, inject
         const migration = targetContract.update.migrations.find(m => m.fromVersion === currentVersion && m.toVersion === targetVersion) ?? null;
         const needsMigration = migration !== null;
         await run.done("CHECK", "SUCCESS", `v${currentVersion} → v${targetVersion}${needsMigration ? ` · migración: ${migration!.migrationId}` : " · sin migraciones"}`);
+
+        // ACCESS — PUERTA OBLIGATORIA (V3): valida la clave única de acceso
+        // contra la API EXTERNA de licenciamiento ANTES de descargar el paquete.
+        await run.begin("ACCESS");
+        await sleep(pace);
+        if (!opts?.accessKey || opts.accessKey.trim().length === 0) {
+          throw new Error("ACCESS_KEY_REQUIRED — se requiere la clave única de acceso del proyecto para descargar actualizaciones");
+        }
+        const access = await validateProjectAccessKey({ packageId: productId, accessKey: opts.accessKey });
+        if (!access.ok) {
+          throw new Error(`${access.code} — ${access.userMessage}`);
+        }
+        await run.done("ACCESS", "SUCCESS", `Clave verificada vía API externa · plan ${access.plan ?? "—"}`);
 
         // DOWNLOAD
         await run.begin("DOWNLOAD");
