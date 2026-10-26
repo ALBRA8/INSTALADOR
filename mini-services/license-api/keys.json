@@ -1,0 +1,96 @@
+{
+  "updatedAt": "2026-10-27T04:43:50.526Z",
+  "keys": [
+    {
+      "accessKey": "ALBR-CRM-8F3K-92QD",
+      "keyId": "key_crm_pro_001",
+      "licensee": "Acme Corp S.A.S.",
+      "plan": "PRO",
+      "products": [
+        "crm"
+      ],
+      "expiresAt": "2026-12-31T23:59:59.000Z",
+      "disabled": false,
+      "note": "Clave demo para el producto CRM",
+      "validCount": 0,
+      "rejectedCount": 0,
+      "lastValidatedAt": null
+    },
+    {
+      "accessKey": "ALBR-LEADS-5M9X-TZ24",
+      "keyId": "key_leads_starter_001",
+      "licensee": "Comercial Andina Ltda.",
+      "plan": "STARTER",
+      "products": [
+        "leads"
+      ],
+      "expiresAt": "2027-06-30T23:59:59.000Z",
+      "disabled": false,
+      "note": "Clave demo para el producto LEADS",
+      "validCount": 0,
+      "rejectedCount": 0,
+      "lastValidatedAt": null
+    },
+    {
+      "accessKey": "ALBR-ALL-7H2P-4RTX",
+      "keyId": "key_enterprise_universal_001",
+      "licensee": "ALBRA Demo — acceso universal",
+      "plan": "ENTERPRISE",
+      "products": [
+        "*"
+      ],
+      "expiresAt": "2027-12-31T23:59:59.000Z",
+      "disabled": false,
+      "note": "Clave demo válida para cualquier producto",
+      "validCount": 0,
+      "rejectedCount": 0,
+      "lastValidatedAt": null
+    },
+    {
+      "accessKey": "ALBR-PLATFORM-0000-FFFF",
+      "keyId": "key_platform_internal_001",
+      "licensee": "ALBRA Platform (interno)",
+      "plan": "PLATFORM",
+      "products": [
+        "*"
+      ],
+      "expiresAt": null,
+      "disabled": false,
+      "internal": true,
+      "note": "Clave de uso interno de la plataforma (certificación, cleanroom, ops)",
+      "validCount": 0,
+      "rejectedCount": 0,
+      "lastValidatedAt": null
+    },
+    {
+      "accessKey": "ALBR-EXPIRED-0000-0000",
+      "keyId": "key_expired_demo_001",
+      "licensee": "Licencia Vencida (demo)",
+      "plan": "PRO",
+      "products": [
+        "*"
+      ],
+      "expiresAt": "2024-01-01T00:00:00.000Z",
+      "disabled": false,
+      "note": "Clave demo vencida — prueba del camino de fallo KEY_EXPIRED",
+      "validCount": 0,
+      "rejectedCount": 0,
+      "lastValidatedAt": null
+    },
+    {
+      "accessKey": "ALBR-DISABLED-0000-0000",
+      "keyId": "key_disabled_demo_001",
+      "licensee": "Licencia Deshabilitada (demo)",
+      "plan": "PRO",
+      "products": [
+        "*"
+      ],
+      "expiresAt": null,
+      "disabled": true,
+      "note": "Clave demo deshabilitada — prueba del camino de fallo KEY_DISABLED",
+      "validCount": 0,
+      "rejectedCount": 0,
+      "lastValidatedAt": null
+    }
+  ]
+}

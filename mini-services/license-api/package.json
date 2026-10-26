@@ -1,0 +1,10 @@
+{
+  "name": "albra-license-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API externa de licencias de ALBRA — valida claves únicas de acceso por proyecto. Servicio independiente (puerto 3020).",
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts"
+  }
+}
