@@ -93,3 +93,18 @@ La integración no es segura si se limita a llamar al driver desde `runInstall()
 - El paquete ALBRA v1 solo lleva `deployment: { adapter, installStrategy }`; no transporta un digest OCI ni un contrato de archivos Compose/secretos.
 
 Por tanto, no se debe añadir CHISMOSO al catálogo ni ejecutar `runDockerCompose()` desde el flujo actual hasta definir una estrategia de despliegue discriminada y persistir el identificador del proyecto Compose. La rama Docker debe omitir el puerto publicado del host, generar el env-file fuera del paquete, preparar la red externa, ejecutar pull/up, esperar health y registrar/recuperar el stack; el rollback debe detener solo ese proyecto sin borrar volúmenes.
+
+
+## Contrato tipado de despliegue Docker — base aditiva (2026-11-09)
+
+Se añadió `src/lib/albra/contracts/docker-compose.ts` y su export desde `contracts/index.ts`. El descriptor valida:
+
+- paths relativos POSIX normalizados, sin absolutos, separadores Windows ni traversal;
+- archivo Compose YAML;
+- `envFile` como ruta generada por el instalador (no contenido secreto dentro del paquete);
+- nombre de proyecto Compose seguro;
+- red privada fija `albra-agents`;
+- imágenes fijadas exclusivamente por digest OCI `@sha256:<64 hex>`, sin tags mutables;
+- timeout de health acotado y política de preservar volúmenes al detener.
+
+Se añadieron pruebas unitarias para rutas, tags mutables, servicios duplicados y red. **No se ejecutaron**. Este descriptor aún no forma parte de `ProductContract` ni activa la instalación Docker; es una base tipada para el siguiente cambio coordinado de registro y lifecycle.
