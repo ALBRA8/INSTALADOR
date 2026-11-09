@@ -166,6 +166,50 @@ export async function dockerComposePreflight(): Promise<DockerPreflightResult> {
   return { ok: true, dockerVersion: docker.stdout.trim(), composeVersion: compose.stdout.trim(), issues };
 }
 
+
+export interface DockerComposeServiceState {
+  service: string;
+  name: string;
+  state: string;
+  health: string | null;
+  exitCode: number | null;
+}
+
+export function parseDockerComposePs(stdout: string): {
+  ok: boolean;
+  services: DockerComposeServiceState[];
+  error?: string;
+} {
+  try {
+    const trimmed = stdout.trim();
+    if (!trimmed) return { ok: true, services: [] };
+    const decoded: unknown = trimmed.startsWith("[")
+      ? JSON.parse(trimmed)
+      : trimmed.split(/\\r?\\n/).filter(Boolean).map(line => JSON.parse(line));
+    const rows = Array.isArray(decoded) ? decoded : [decoded];
+    const services: DockerComposeServiceState[] = [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        return { ok: false, services: [], error: "Compose status contains a non-object row." };
+      }
+      const item = row as Record<string, unknown>;
+      if (typeof item.Service !== "string" || typeof item.State !== "string") {
+        return { ok: false, services: [], error: "Compose status row is missing Service or State." };
+      }
+      services.push({
+        service: item.Service,
+        name: typeof item.Name === "string" ? item.Name : "",
+        state: item.State.toLowerCase(),
+        health: typeof item.Health === "string" && item.Health.length > 0 ? item.Health.toLowerCase() : null,
+        exitCode: typeof item.ExitCode === "number" ? item.ExitCode : null,
+      });
+    }
+    return { ok: true, services };
+  } catch {
+    return { ok: false, services: [], error: "Compose returned invalid JSON status." };
+  }
+}
+
 /**
  * Executes a narrowly-scoped Compose lifecycle command.
  * "down" and volume deletion are intentionally absent: uninstall must be a
