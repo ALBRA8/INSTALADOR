@@ -75,13 +75,27 @@ El futuro contrato de producto debe declarar explícitamente:
 - [ ] Un VPS no queda expuesto públicamente sin TLS y autenticación.
 - [ ] El producto solo se incorpora a `CATALOG` cuando este adaptador y sus pruebas estén integrados.
 
+## Avance de implementación (2026-11-09)
+
+Se añadió `src/lib/albra/adapters/docker-compose.ts` y se exportó desde `adapters/index.ts`.
+
+Capacidades implementadas en esta primera pieza:
+- Preflight de solo lectura para Docker Engine y Docker Compose v2.
+- Ejecución sin shell mediante `execFile` y lista de argumentos controlada.
+- Validación del nombre de proyecto Compose.
+- Restricción del archivo Compose al directorio administrado del producto.
+- Acciones iniciales `up`, `stop`, `start`, `restart`, `ps` y `pull`.
+- No existe acción `down` ni borrado de volúmenes; la desinstalación requiere una política explícita de datos.
+
+**Límite importante:** este driver está aislado y exportado, pero todavía NO está conectado al flujo `preflight()` / `runInstall()` del motor. No se debe mostrar el PANEL como instalable todavía. Tampoco se ha ejecutado una compilación ni pruebas de integración en un host con Docker.
+
 ## Próximo orden de implementación
 
-1. Definir una interfaz de adaptador de despliegue independiente del adaptador local actual.
-2. Implementar adaptador Docker Compose con operaciones y evidencia.
-3. Extender preflight para detectar Docker y requisitos de host.
-4. Extender el formato de paquete para referenciar artefactos OCI por digest, conservando compatibilidad con paquetes actuales.
-5. Añadir pruebas de contrato, seguridad, persistencia y rollback.
+1. Conectar `dockerComposePreflight()` al preflight de productos que declaren adaptador Docker.
+2. Extender el instalador para ejecutar `up` y esperar healthcheck, manteniendo registro y rollback transaccionales.
+3. Extender el formato de paquete para referenciar artefactos OCI por digest, conservando compatibilidad con paquetes actuales.
+4. Añadir pruebas de contrato, seguridad, persistencia y rollback.
+5. Definir ciclo de vida con backup/restore y desinstalación que preserve datos por defecto.
 6. Solo entonces registrar `panel-de-control` en `PACKAGE_BUILDS` y `CATALOG`.
 7. Conectar el adaptador HTTP EEC del PANEL con las rutas reales del INSTALADOR y ejecutar piloto E2E local y VPS.
 
