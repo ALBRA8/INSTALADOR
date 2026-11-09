@@ -3,13 +3,13 @@
  *
  * Security boundaries:
  * - Never invokes a shell; all arguments are passed as an argv array.
- * - The compose file must resolve inside the managed product directory.
+ * - The Compose file must exist inside the real managed product directory.
+ * - Symlinks that escape the product directory are rejected.
  * - Project names are validated before being passed to Docker.
- * - This module does not download images, generate secrets, or delete volumes.
- *   Those actions belong to the signed-package installer and explicit lifecycle
- *   workflows, not to an implicit "up" command.
+ * - This module does not generate secrets or delete volumes.
  */
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -20,7 +20,7 @@ export type DockerComposeAction = "up" | "stop" | "start" | "restart" | "ps" | "
 
 export interface DockerCommandResult {
   ok: boolean;
-  code: "OK" | "DOCKER_NOT_FOUND" | "DOCKER_COMMAND_FAILED" | "COMPOSE_FILE_INVALID" | "PROJECT_NAME_INVALID";
+  code: "OK" | "DOCKER_NOT_FOUND" | "DOCKER_COMMAND_FAILED" | "PRODUCT_DIR_INVALID" | "COMPOSE_FILE_INVALID" | "COMPOSE_FILE_NOT_FOUND" | "PROJECT_NAME_INVALID";
   stdout: string;
   stderr: string;
   exitCode: number | null;
@@ -37,13 +37,46 @@ function validateProjectName(projectName: string): boolean {
   return PROJECT_RE.test(projectName);
 }
 
-function resolveComposeFile(productDir: string, composeFile: string): string | null {
-  const root = path.resolve(productDir);
-  const candidate = path.resolve(root, composeFile);
+function isInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
-  if (!/\.(yml|yaml)$/i.test(candidate)) return null;
-  return candidate;
+  return relative.length > 0 && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+async function resolveManagedPaths(productDir: string, composeFile: string): Promise<
+  | { ok: true; root: string; composePath: string }
+  | { ok: false; code: "PRODUCT_DIR_INVALID" | "COMPOSE_FILE_INVALID" | "COMPOSE_FILE_NOT_FOUND"; message: string }
+> {
+  let root: string;
+  try {
+    const rootStat = await fs.stat(productDir);
+    if (!rootStat.isDirectory()) throw new Error("not a directory");
+    root = await fs.realpath(productDir);
+  } catch {
+    return { ok: false, code: "PRODUCT_DIR_INVALID", message: "Managed product directory does not exist or is not a directory." };
+  }
+
+  if (typeof composeFile !== "string" || composeFile.trim().length === 0 || !/\.(yml|yaml)$/i.test(composeFile)) {
+    return { ok: false, code: "COMPOSE_FILE_INVALID", message: "Compose file must be a .yml/.yaml file inside the managed product directory." };
+  }
+
+  const unresolved = path.resolve(root, composeFile);
+  if (!isInside(root, unresolved)) {
+    return { ok: false, code: "COMPOSE_FILE_INVALID", message: "Compose file must remain inside the managed product directory." };
+  }
+
+  let composePath: string;
+  try {
+    const stat = await fs.stat(unresolved);
+    if (!stat.isFile()) throw new Error("not a file");
+    composePath = await fs.realpath(unresolved);
+  } catch {
+    return { ok: false, code: "COMPOSE_FILE_NOT_FOUND", message: "Compose file does not exist or cannot be read." };
+  }
+
+  if (!isInside(root, composePath)) {
+    return { ok: false, code: "COMPOSE_FILE_INVALID", message: "Compose file symlinks may not escape the managed product directory." };
+  }
+  return { ok: true, root, composePath };
 }
 
 async function runDocker(args: string[], cwd: string): Promise<DockerCommandResult> {
@@ -59,13 +92,13 @@ async function runDocker(args: string[], cwd: string): Promise<DockerCommandResu
   } catch (error) {
     const e = error as NodeJS.ErrnoException & { code?: string | number; stdout?: string; stderr?: string };
     const notFound = e.code === "ENOENT";
-    const numericCode = typeof e.code === "number" ? e.code : null;
     return {
       ok: false,
       code: notFound ? "DOCKER_NOT_FOUND" : "DOCKER_COMMAND_FAILED",
       stdout: e.stdout ?? "",
-      stderr: e.stderr ?? e.message,
-      exitCode: numericCode,
+      // Avoid returning arbitrary process environment or command context here.
+      stderr: (e.stderr ?? e.message ?? "Docker command failed").slice(0, 4000),
+      exitCode: typeof e.code === "number" ? e.code : null,
     };
   }
 }
@@ -97,12 +130,7 @@ export async function dockerComposePreflight(): Promise<DockerPreflightResult> {
 
   issues.push({ code: "DOCKER_ENGINE_OK", severity: "RESOLVED", message: "Docker Engine responde." });
   issues.push({ code: "DOCKER_COMPOSE_OK", severity: "RESOLVED", message: "Docker Compose v2 está disponible." });
-  return {
-    ok: true,
-    dockerVersion: docker.stdout.trim(),
-    composeVersion: compose.stdout.trim(),
-    issues,
-  };
+  return { ok: true, dockerVersion: docker.stdout.trim(), composeVersion: compose.stdout.trim(), issues };
 }
 
 /**
@@ -120,14 +148,15 @@ export async function runDockerCompose(opts: {
     return { ok: false, code: "PROJECT_NAME_INVALID", stdout: "", stderr: "Invalid Compose project name.", exitCode: null };
   }
 
-  const composePath = resolveComposeFile(opts.productDir, opts.composeFile ?? "compose.yaml");
-  if (!composePath) {
-    return { ok: false, code: "COMPOSE_FILE_INVALID", stdout: "", stderr: "Compose file must be a .yml/.yaml file inside the managed product directory.", exitCode: null };
+  const paths = await resolveManagedPaths(opts.productDir, opts.composeFile ?? "compose.yaml");
+  if (!paths.ok) {
+    return { ok: false, code: paths.code, stdout: "", stderr: paths.message, exitCode: null };
   }
 
-  const base = ["compose", "--project-name", opts.projectName, "--file", composePath];
+  const base = ["compose", "--project-name", opts.projectName, "--file", paths.composePath];
   const actionArgs: Record<DockerComposeAction, string[]> = {
-    up: ["up", "--detach", "--remove-orphans"],
+    // Do not remove orphan containers implicitly; only explicitly owned services are changed.
+    up: ["up", "--detach"],
     stop: ["stop"],
     start: ["start"],
     restart: ["restart"],
@@ -135,5 +164,5 @@ export async function runDockerCompose(opts: {
     pull: ["pull"],
   };
 
-  return runDocker([...base, ...actionArgs[opts.action]], opts.productDir);
+  return runDocker([...base, ...actionArgs[opts.action]], paths.root);
 }
