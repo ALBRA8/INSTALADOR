@@ -176,6 +176,7 @@ export async function runDockerCompose(opts: {
   composeFile?: string;
   projectName: string;
   action: DockerComposeAction;
+  envFile?: string;
 }): Promise<DockerCommandResult> {
   if (!validateProjectName(opts.projectName)) {
     return { ok: false, code: "PROJECT_NAME_INVALID", stdout: "", stderr: "Invalid Compose project name.", exitCode: null };
@@ -186,7 +187,14 @@ export async function runDockerCompose(opts: {
     return { ok: false, code: paths.code, stdout: "", stderr: paths.message, exitCode: null };
   }
 
-  const env = await resolveManagedEnvPath(paths.root, opts.envFile);\n  if (!env.ok) {\n    return { ok: false, code: env.code, stdout: "", stderr: env.message, exitCode: null };\n  }\n\n  const base = ["compose", "--project-name", opts.projectName];\n  if (env.envPath) base.push("--env-file", env.envPath);\n  base.push("--file", paths.composePath);
+  const env = await resolveManagedEnvPath(paths.root, opts.envFile);
+  if (!env.ok) {
+    return { ok: false, code: env.code, stdout: "", stderr: env.message, exitCode: null };
+  }
+
+  const base = ["compose", "--project-name", opts.projectName];
+  if (env.envPath) base.push("--env-file", env.envPath);
+  base.push("--file", paths.composePath);
   const actionArgs: Record<DockerComposeAction, string[]> = {
     // Do not remove orphan containers implicitly; only explicitly owned services are changed.
     up: ["up", "--detach"],
