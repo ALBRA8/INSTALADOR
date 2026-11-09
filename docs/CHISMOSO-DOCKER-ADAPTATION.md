@@ -108,3 +108,14 @@ Se añadió `src/lib/albra/contracts/docker-compose.ts` y su export desde `contr
 - timeout de health acotado y política de preservar volúmenes al detener.
 
 Se añadieron pruebas unitarias para rutas, tags mutables, servicios duplicados y red. **No se ejecutaron**. Este descriptor aún no forma parte de `ProductContract` ni activa la instalación Docker; es una base tipada para el siguiente cambio coordinado de registro y lifecycle.
+
+
+## Registro persistente de despliegues Compose — base (2026-11-09)
+
+Se añadió al schema Prisma el modelo ContainerDeployment, relacionado 1:1 con InstalledProduct mediante productId. Guarda el nombre único del proyecto Compose, directorio de instalación, rutas de Compose/env-file, red, digests de imagen, estado deseado/observado, health y último error/sondeo. La relación elimina el registro del despliegue cuando se elimina el producto, pero detener un stack no elimina sus volúmenes.
+
+src/lib/albra/core/registry.ts ahora expone lectura/listado, registro idempotente por producto y actualización del estado observado. El driver incluye parseDockerComposePs() para interpretar salida JSON-lines o array, normalizar servicio/estado/health y rechazar filas incompletas; hay pruebas para esos formatos y errores.
+
+Importante: el proyecto no mantiene un historial de migraciones Prisma y actualmente usa prisma db push (también en el entrypoint Docker del PANEL). Por eso el cambio se hizo en el schema, sin inventar una migración aislada que pudiera fallar en bases existentes. Aún hay que ejecutar prisma generate y prisma db push durante la validación del entorno de despliegue.
+
+Esto todavía no conecta START/STOP/RESTART/HEALTH al driver. Falta orquestar operaciones bajo lock, crear/verificar la red externa albra-agents, generar el env-file seguro, esperar readiness por servicio y reconciliar estado real contra el registro. No se ha ejecutado Bun, Prisma, Docker ni las pruebas en este avance.
