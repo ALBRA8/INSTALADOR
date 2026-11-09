@@ -20,7 +20,7 @@ export type DockerComposeAction = "up" | "stop" | "start" | "restart" | "ps" | "
 
 export interface DockerCommandResult {
   ok: boolean;
-  code: "OK" | "DOCKER_NOT_FOUND" | "DOCKER_COMMAND_FAILED" | "PRODUCT_DIR_INVALID" | "COMPOSE_FILE_INVALID" | "COMPOSE_FILE_NOT_FOUND" | "PROJECT_NAME_INVALID";
+  code: "OK" | "DOCKER_NOT_FOUND" | "DOCKER_COMMAND_FAILED" | "PRODUCT_DIR_INVALID" | "COMPOSE_FILE_INVALID" | "COMPOSE_FILE_NOT_FOUND" | "ENV_FILE_INVALID" | "ENV_FILE_NOT_FOUND" | "PROJECT_NAME_INVALID";
   stdout: string;
   stderr: string;
   exitCode: number | null;
@@ -77,6 +77,39 @@ async function resolveManagedPaths(productDir: string, composeFile: string): Pro
     return { ok: false, code: "COMPOSE_FILE_INVALID", message: "Compose file symlinks may not escape the managed product directory." };
   }
   return { ok: true, root, composePath };
+}
+
+async function resolveManagedEnvPath(root: string, envFile?: string): Promise<
+  | { ok: true; envPath?: string }
+  | { ok: false; code: "ENV_FILE_INVALID" | "ENV_FILE_NOT_FOUND"; message: string }
+> {
+  if (envFile === undefined) return { ok: true };
+  if (typeof envFile !== "string" || envFile.trim().length === 0 || path.isAbsolute(envFile)) {
+    return { ok: false, code: "ENV_FILE_INVALID", message: "Environment file must be a relative path inside the managed product directory." };
+  }
+  const unresolved = path.resolve(root, envFile);
+  if (!isInside(root, unresolved)) {
+    return { ok: false, code: "ENV_FILE_INVALID", message: "Environment file must remain inside the managed product directory." };
+  }
+  try {
+    const stat = await fs.stat(unresolved);
+    if (!stat.isFile()) throw new Error("not a file");
+    const envPath = await fs.realpath(unresolved);
+    if (!isInside(root, envPath)) {
+      return { ok: false, code: "ENV_FILE_INVALID", message: "Environment file symlinks may not escape the managed product directory." };
+    }
+    // On POSIX, reject group/world-readable secret files. Windows ACLs are
+    // managed by the host and are not represented reliably by mode bits.
+    if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
+      return { ok: false, code: "ENV_FILE_INVALID", message: "Environment file permissions are too broad; use mode 0600." };
+    }
+    return { ok: true, envPath };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { ok: false, code: "ENV_FILE_NOT_FOUND", message: "Environment file does not exist." };
+    }
+    return { ok: false, code: "ENV_FILE_INVALID", message: "Environment file is not a readable regular file." };
+  }
 }
 
 async function runDocker(args: string[], cwd: string): Promise<DockerCommandResult> {
@@ -153,7 +186,7 @@ export async function runDockerCompose(opts: {
     return { ok: false, code: paths.code, stdout: "", stderr: paths.message, exitCode: null };
   }
 
-  const base = ["compose", "--project-name", opts.projectName, "--file", paths.composePath];
+  const env = await resolveManagedEnvPath(paths.root, opts.envFile);\n  if (!env.ok) {\n    return { ok: false, code: env.code, stdout: "", stderr: env.message, exitCode: null };\n  }\n\n  const base = ["compose", "--project-name", opts.projectName];\n  if (env.envPath) base.push("--env-file", env.envPath);\n  base.push("--file", paths.composePath);
   const actionArgs: Record<DockerComposeAction, string[]> = {
     // Do not remove orphan containers implicitly; only explicitly owned services are changed.
     up: ["up", "--detach"],
