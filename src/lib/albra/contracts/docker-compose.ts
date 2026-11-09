@@ -17,13 +17,13 @@ const SafeRelativePath = z.string().min(1).refine(
 );
 
 const ImageDigest = z.string().min(1).refine(
-  value => !/\\s/.test(value) && /^.+@sha256:[a-f0-9]{64}$/.test(value),
+  value => !/\s/.test(value) && /^.+@sha256:[a-f0-9]{64}$/.test(value),
   "Container images must be pinned by an immutable sha256 digest",
 );
 
 export const DockerComposeDeploymentSchema = z.object({
   schemaVersion: z.literal("1.0.0"),
-  composeFile: SafeRelativePath.refine(value => /\\.ya?ml$/i.test(value), "Compose file must be YAML"),
+  composeFile: SafeRelativePath.refine(value => /\.ya?ml$/i.test(value), "Compose file must be YAML"),
   /** Installer-generated at mode 0600; never package-supplied secret contents. */
   envFile: SafeRelativePath,
   projectName: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/),
