@@ -78,7 +78,7 @@ describe("parseDockerComposePs", () => {
     const result = parseDockerComposePs([
       JSON.stringify({ Service: "app", Name: "agent-app-1", State: "running", Health: "healthy", ExitCode: 0 }),
       JSON.stringify({ Service: "redis", Name: "agent-redis-1", State: "running", Health: "", ExitCode: 0 }),
-    ].join("\\n"));
+    ].join("\n"));
     expect(result.ok).toBe(true);
     expect(result.services).toHaveLength(2);
     expect(result.services[0]).toEqual({
