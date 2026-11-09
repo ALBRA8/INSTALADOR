@@ -185,7 +185,7 @@ export function parseDockerComposePs(stdout: string): {
     if (!trimmed) return { ok: true, services: [] };
     const decoded: unknown = trimmed.startsWith("[")
       ? JSON.parse(trimmed)
-      : trimmed.split(/\\r?\\n/).filter(Boolean).map(line => JSON.parse(line));
+      : trimmed.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
     const rows = Array.isArray(decoded) ? decoded : [decoded];
     const services: DockerComposeServiceState[] = [];
     for (const row of rows) {
