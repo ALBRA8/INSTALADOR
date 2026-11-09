@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runDockerCompose } from "./docker-compose";
+import { parseDockerComposePs, runDockerCompose } from "./docker-compose";
 
 describe("runDockerCompose env file confinement", () => {
   let root = "";
@@ -69,5 +69,31 @@ describe("runDockerCompose env file confinement", () => {
     });
     expect(result.ok).toBe(false);
     expect(result.code).toBe("ENV_FILE_INVALID");
+  });
+});
+
+
+describe("parseDockerComposePs", () => {
+  test("parses Compose JSON-lines output and normalizes state", () => {
+    const result = parseDockerComposePs([
+      JSON.stringify({ Service: "app", Name: "agent-app-1", State: "running", Health: "healthy", ExitCode: 0 }),
+      JSON.stringify({ Service: "redis", Name: "agent-redis-1", State: "running", Health: "", ExitCode: 0 }),
+    ].join("\\n"));
+    expect(result.ok).toBe(true);
+    expect(result.services).toHaveLength(2);
+    expect(result.services[0]).toEqual({
+      service: "app",
+      name: "agent-app-1",
+      state: "running",
+      health: "healthy",
+      exitCode: 0,
+    });
+    expect(result.services[1].health).toBeNull();
+  });
+
+  test("accepts an empty project and rejects malformed or incomplete rows", () => {
+    expect(parseDockerComposePs("").services).toEqual([]);
+    expect(parseDockerComposePs("{not-json").ok).toBe(false);
+    expect(parseDockerComposePs(JSON.stringify({ Name: "missing-service" })).ok).toBe(false);
   });
 });
