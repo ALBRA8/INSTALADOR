@@ -71,3 +71,12 @@ Se añadió `compose.albra.yaml` en `ALBRA8/AGENTE-CHISMOSO` como perfil separad
 - En sistemas POSIX se rechazan permisos más amplios que 0600.
 - Se añadió `docker-compose.test.ts` con pruebas para ruta fuera del producto, archivo ausente, permisos amplios y ruta absoluta.
 - Las pruebas todavía no se han ejecutado y el driver sigue sin integrarse al motor `preflight()` / `runInstall()`.
+
+
+## Correcciones detectadas en revisión de runtime (2026-11-09)
+
+- El Dockerfile instala ahora `bash` y `sqlite` en la imagen final: `backup-sqlite.sh` usa sintaxis Bash y requiere el ejecutable `sqlite3`.
+- El directorio persistente `/data` se crea con propietario UID/GID 1001, para que el usuario no root pueda escribir SQLite, configuración y logs; `/opt/scripts` conserva permisos de lectura/ejecución para ese usuario.
+- El scheduler deja de depender de rutas absolutas del entorno de desarrollo. Su configuración usa `CHISMOSO_WATCH_CONFIG` o `/data/watch.json`; el log usa `CHISMOSO_SCHEDULER_LOG_PATH` o `/data/scheduler.log`.
+- Se confirmó que el Dockerfile copia ambos scripts a `/opt/scripts`, instala `tini` y que TypeScript compila el entrypoint `src/scheduler/run.ts` a `dist/scheduler/run.js`, que coincide con el comando del perfil.
+- Estas son correcciones de código revisadas en GitHub; aún falta ejecutar `docker build`, `docker compose config` y una prueba de arranque/backup con volúmenes reales. No declarar el perfil validado hasta completar esas pruebas.
