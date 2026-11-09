@@ -86,6 +86,9 @@ Capacidades implementadas en esta primera pieza:
 - Restricción del archivo Compose al directorio administrado del producto.
 - Acciones iniciales `up`, `stop`, `start`, `restart`, `ps` y `pull`.
 - No existe acción `down` ni borrado de volúmenes; la desinstalación requiere una política explícita de datos.
+- Validación asíncrona de directorio real, archivo Compose existente y tipo de archivo.
+- Resolución de rutas reales para bloquear symlinks que escapen del directorio administrado.
+- `up` ya no elimina contenedores huérfanos implícitamente (`--remove-orphans` retirado).
 
 **Límite importante:** este driver está aislado y exportado, pero todavía NO está conectado al flujo `preflight()` / `runInstall()` del motor. No se debe mostrar el PANEL como instalable todavía. Tampoco se ha ejecutado una compilación ni pruebas de integración en un host con Docker.
 
