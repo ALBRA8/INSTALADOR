@@ -40,6 +40,27 @@ model InstalledProduct {
   originCommit    String?   // sha resuelto
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  containerDeployment ContainerDeployment?
+}
+
+model ContainerDeployment {
+  id                 String   @id @default(cuid())
+  productId          String   @unique
+  projectName        String   @unique
+  installPath        String
+  composeFile        String
+  envFile            String
+  networkName        String   @default("albra-agents")
+  imageDigests       Json
+  desiredState       String   @default("STOPPED") // RUNNING | STOPPED
+  observedState      String   @default("UNKNOWN") // RUNNING | STOPPED | DEGRADED | UNKNOWN
+  health             String   @default("UNKNOWN") // HEALTHY | DEGRADED | FAILED | UNKNOWN
+  lastObservedAt     DateTime?
+  lastError          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  product InstalledProduct @relation(fields: [productId], references: [productId], onDelete: Cascade)
 }
 
 model PackageArtifact {
