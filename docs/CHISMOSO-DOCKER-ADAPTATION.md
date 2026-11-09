@@ -43,7 +43,7 @@ Se añadió `compose.albra.yaml` en `ALBRA8/AGENTE-CHISMOSO` como perfil separad
 - Sin `container_name` fijos; usar nombres aislados por proyecto Compose.
 - Sin puertos publicados directamente; gateway ALBRA conecta por red privada.
 - Volúmenes persistentes dedicados por instalación.
-- Variables y secretos suministrados desde `.env.albra`, que el instalador debe crear con permisos restrictivos (0600) y fuera del paquete.
+- Variables y secretos suministrados desde `.env.albra`, que el instalador debe crear con permisos restrictivos (0600) y fuera del paquete. El driver debe invocar Compose con `--env-file .env.albra` (resuelto y confinado al directorio de esa instalación), porque Compose no carga automáticamente un archivo con ese nombre para interpolación.
 - `CHISMOSO_IMAGE` y `CHISMOSO_REDIS_IMAGE` son obligatorias y deben ser referencias OCI `@sha256:` inmutables; no se han publicado ni fijado todavía.
 - Recursos, límites de logs, `no-new-privileges` y usuario no root conservados.
 - Healthchecks y dependencias explícitas; app y scheduler conectados a la red externa `albra-agents`; el instalador debe crearla antes del `compose up`. No declarar listo el agente hasta que app esté healthy.
