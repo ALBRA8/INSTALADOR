@@ -2,8 +2,7 @@
  * ALBRA — Registry (LAYER 5): registro local de productos instalados.
  */
 import { db } from "@/lib/db";
-import type { InstalledProduct } from "@prisma/client";
-import type { ContainerDeployment, Prisma } from "@prisma/client";
+import type { ContainerDeployment, InstalledProduct, Prisma } from "@prisma/client";
 
 export async function getContainerDeployment(productId: string): Promise<ContainerDeployment | null> {
   return db.containerDeployment.findUnique({ where: { productId } });
