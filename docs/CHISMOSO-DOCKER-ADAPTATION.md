@@ -63,3 +63,11 @@ Se añadió `compose.albra.yaml` en `ALBRA8/AGENTE-CHISMOSO` como perfil separad
 - El perfil ALBRA ya existe, pero aún no se ha validado con `docker compose config`, build ni despliegue real.
 - No se ha probado build ni despliegue real en este entorno; no hay aún digest de imagen aprobado.
 - El adaptador Docker del INSTALADOR aún no está conectado a `preflight()` / `runInstall()`.
+
+
+### Progreso del driver (2026-11-09)
+- `runDockerCompose` acepta ahora `envFile` opcional y pasa `--env-file` a Compose para la interpolación de variables.
+- El archivo debe ser una ruta relativa dentro del producto; se valida el destino real para impedir escapes por symlink.
+- En sistemas POSIX se rechazan permisos más amplios que 0600.
+- Se añadió `docker-compose.test.ts` con pruebas para ruta fuera del producto, archivo ausente, permisos amplios y ruta absoluta.
+- Las pruebas todavía no se han ejecutado y el driver sigue sin integrarse al motor `preflight()` / `runInstall()`.
