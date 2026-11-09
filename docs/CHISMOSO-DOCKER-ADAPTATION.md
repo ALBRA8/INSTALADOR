@@ -1,6 +1,6 @@
 # Adaptación de AGENTE-CHISMOSO al despliegue administrado por ALBRA
 
-Estado: evaluación técnica; no es todavía un paquete instalable desde PANEL.
+Estado: perfil Compose ALBRA creado en AGENTE-CHISMOSO; pendiente de imagen OCI fijada, red gateway, pruebas y conexión al motor. No es todavía instalable desde PANEL.
 Fecha: 2026-11-09.
 
 ## Repositorio identificado
@@ -37,29 +37,29 @@ Volúmenes declarados: `chismoso_data`, `chismoso_reports`, `chismoso_backups`, 
 
 ## Perfil recomendado para ALBRA
 
-Crear un Compose administrado separado (por ejemplo, `compose.albra.yaml`) con estas características:
+Se añadió `compose.albra.yaml` en `ALBRA8/AGENTE-CHISMOSO` como perfil separado, sin modificar el despliegue independiente existente. El perfil contiene estas decisiones:
 
 - Servicios app, scheduler, backup y Redis; sin Caddy embebido.
 - Sin `container_name` fijos; usar nombres aislados por proyecto Compose.
 - Sin puertos publicados directamente; gateway ALBRA conecta por red privada.
 - Volúmenes persistentes dedicados por instalación.
-- Variables y secretos suministrados desde archivos protegidos generados por el host.
-- Imagen OCI fijada por digest para cada release aprobada.
+- Variables y secretos suministrados desde `.env.albra`, que el instalador debe crear con permisos restrictivos (0600) y fuera del paquete.
+- `CHISMOSO_IMAGE` y `CHISMOSO_REDIS_IMAGE` son obligatorias y deben ser referencias OCI `@sha256:` inmutables; no se han publicado ni fijado todavía.
 - Recursos, límites de logs, `no-new-privileges` y usuario no root conservados.
-- Healthchecks y dependencias explícitas; no declarar listo el agente hasta que app esté healthy.
+- Healthchecks y dependencias explícitas; app y scheduler conectados a la red externa `albra-agents`; el instalador debe crearla antes del `compose up`. No declarar listo el agente hasta que app esté healthy.
 
 ## Secuencia de integración
 
 1. Completar y validar primero el despliegue Docker del PANEL.
 2. Resolver el contrato de red entre PANEL/gateway y servicios de agentes.
 3. Publicar una imagen OCI de Chismoso y fijar su digest (o definir build reproducible desde commit).
-4. Crear `compose.albra.yaml` y probar instalación aislada, reinicio, persistencia, backup y restore.
+4. Completar digest OCI y `.env.albra`; crear la red `albra-agents`; probar instalación aislada, reinicio, persistencia, backup y restore.
 5. Definir contrato de agente y endpoints autenticados de status/health/control.
 6. Añadir el producto al catálogo solo cuando el ciclo INSTALL/START/STOP/STATUS/HEALTH/UPDATE/ROLLBACK esté probado.
 
 ## No habilitado todavía
 
 - Chismoso no está agregado al catálogo de INSTALADOR.
-- El Compose existente no está listo para ser ejecutado directamente por el driver genérico de ALBRA.
-- No se ha probado build ni despliegue real en este entorno.
+- El perfil ALBRA ya existe, pero aún no se ha validado con `docker compose config`, build ni despliegue real.
+- No se ha probado build ni despliegue real en este entorno; no hay aún digest de imagen aprobado.
 - El adaptador Docker del INSTALADOR aún no está conectado a `preflight()` / `runInstall()`.
