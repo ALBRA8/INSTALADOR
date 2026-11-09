@@ -80,3 +80,16 @@ Se añadió `compose.albra.yaml` en `ALBRA8/AGENTE-CHISMOSO` como perfil separad
 - El scheduler deja de depender de rutas absolutas del entorno de desarrollo. Su configuración usa `CHISMOSO_WATCH_CONFIG` o `/data/watch.json`; el log usa `CHISMOSO_SCHEDULER_LOG_PATH` o `/data/scheduler.log`.
 - Se confirmó que el Dockerfile copia ambos scripts a `/opt/scripts`, instala `tini` y que TypeScript compila el entrypoint `src/scheduler/run.ts` a `dist/scheduler/run.js`, que coincide con el comando del perfil.
 - Estas son correcciones de código revisadas en GitHub; aún falta ejecutar `docker build`, `docker compose config` y una prueba de arranque/backup con volúmenes reales. No declarar el perfil validado hasta completar esas pruebas.
+
+
+## Bloqueo confirmado en el motor del INSTALADOR (2026-11-09)
+
+La integración no es segura si se limita a llamar al driver desde `runInstall()`:
+
+- `preflight()` siempre obtiene el adapter local, asigna un puerto del host y valida compatibilidad con el contrato actual; no inspecciona un tipo de despliegue Docker.
+- `runInstall()` siempre extrae `payload.application[]` a staging, hace commit a un directorio de aplicación y finalmente llama a `startProductCore()`.
+- `startProductCore()` administra procesos del host mediante PID/puerto/health autenticado; no administra proyectos Compose ni persiste su identidad.
+- `ProductContractSchema.deployment` solo acepta `local | selfhosted | saas` y adapters `windows-local | linux-local | local-dev | selfhosted-vps`.
+- El paquete ALBRA v1 solo lleva `deployment: { adapter, installStrategy }`; no transporta un digest OCI ni un contrato de archivos Compose/secretos.
+
+Por tanto, no se debe añadir CHISMOSO al catálogo ni ejecutar `runDockerCompose()` desde el flujo actual hasta definir una estrategia de despliegue discriminada y persistir el identificador del proyecto Compose. La rama Docker debe omitir el puerto publicado del host, generar el env-file fuera del paquete, preparar la red externa, ejecutar pull/up, esperar health y registrar/recuperar el stack; el rollback debe detener solo ese proyecto sin borrar volúmenes.
