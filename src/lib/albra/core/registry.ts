@@ -3,6 +3,62 @@
  */
 import { db } from "@/lib/db";
 import type { InstalledProduct } from "@prisma/client";
+import type { ContainerDeployment, Prisma } from "@prisma/client";
+
+export async function getContainerDeployment(productId: string): Promise<ContainerDeployment | null> {
+  return db.containerDeployment.findUnique({ where: { productId } });
+}
+
+export async function listContainerDeployments(): Promise<ContainerDeployment[]> {
+  return db.containerDeployment.findMany({ orderBy: { createdAt: "asc" } });
+}
+
+export async function registerContainerDeployment(input: {
+  productId: string;
+  projectName: string;
+  installPath: string;
+  composeFile: string;
+  envFile: string;
+  networkName: string;
+  imageDigests: Prisma.InputJsonValue;
+}): Promise<ContainerDeployment> {
+  return db.containerDeployment.upsert({
+    where: { productId: input.productId },
+    create: {
+      ...input,
+      desiredState: "STOPPED",
+      observedState: "UNKNOWN",
+      health: "UNKNOWN",
+    },
+    update: {
+      projectName: input.projectName,
+      installPath: input.installPath,
+      composeFile: input.composeFile,
+      envFile: input.envFile,
+      networkName: input.networkName,
+      imageDigests: input.imageDigests,
+      observedState: "UNKNOWN",
+      health: "UNKNOWN",
+      lastError: null,
+    },
+  });
+}
+
+export async function updateContainerDeploymentState(
+  productId: string,
+  state: {
+    desiredState?: "RUNNING" | "STOPPED";
+    observedState?: "RUNNING" | "STOPPED" | "DEGRADED" | "UNKNOWN";
+    health?: "HEALTHY" | "DEGRADED" | "FAILED" | "UNKNOWN";
+    lastError?: string | null;
+  },
+): Promise<ContainerDeployment> {
+  return db.containerDeployment.update({
+    where: { productId },
+    data: { ...state, lastObservedAt: new Date() },
+  });
+}
+
 
 export async function getInstalled(productId: string): Promise<InstalledProduct | null> {
   return db.installedProduct.findUnique({ where: { productId } });
