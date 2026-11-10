@@ -119,3 +119,12 @@ src/lib/albra/core/registry.ts ahora expone lectura/listado, registro idempotent
 Importante: el proyecto no mantiene un historial de migraciones Prisma y actualmente usa prisma db push (también en el entrypoint Docker del PANEL). Por eso el cambio se hizo en el schema, sin inventar una migración aislada que pudiera fallar en bases existentes. Aún hay que ejecutar prisma generate y prisma db push durante la validación del entorno de despliegue.
 
 Esto todavía no conecta START/STOP/RESTART/HEALTH al driver. Falta orquestar operaciones bajo lock, crear/verificar la red externa albra-agents, generar el env-file seguro, esperar readiness por servicio y reconciliar estado real contra el registro. No se ha ejecutado Bun, Prisma, Docker ni las pruebas en este avance.
+
+
+## Ciclo de vida Compose — primera capa de control (2026-11-09)
+
+Se añadió core/container-lifecycle.ts con acciones START, STOP, RESTART, STATUS y HEALTH para un ContainerDeployment ya registrado. Cada acción queda serializada por el lock por producto, usa exclusivamente projectName + composeFile + envFile persistidos, consulta después `compose ps --all --format json` y actualiza desiredState, observedState, health y lastError.
+
+START/RESTART verifican o crean únicamente la red bridge administrada `albra-agents`; la operación es tolerante a una carrera entre dos instaladores. La agregación distingue servicios todos detenidos, todos running, servicios aún arrancando, unhealthy y salidas no-cero. STOP usa `docker compose stop`: no ejecuta down, no elimina contenedores ni borra volúmenes.
+
+Se añadieron pruebas unitarias para la agregación de estado. No se ejecutaron todavía. Esta capa requiere un registro ya creado y un env-file ya generado; aún no crea secretos ni instala el stack (`pull`/`up`), no espera readiness con timeout y no se ha conectado a endpoints EEC/API. En particular, START no sustituye al primer `up` de instalación.
