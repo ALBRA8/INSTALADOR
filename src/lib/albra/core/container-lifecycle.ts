@@ -29,7 +29,13 @@ export interface ContainerLifecycleResult {
   error?: string;
 }
 
-export function summarizeContainerServices(services: DockerComposeServiceState[]) {
+/** Resumen consolidado (tipo explícito: evita narrowing por discriminación de unión). */
+export interface ContainerServiceSummary {
+  observedState: "RUNNING" | "STOPPED" | "DEGRADED" | "UNKNOWN";
+  health: "HEALTHY" | "DEGRADED" | "FAILED" | "UNKNOWN";
+}
+
+export function summarizeContainerServices(services: DockerComposeServiceState[]): ContainerServiceSummary {
   if (services.length === 0) {
     return { observedState: "STOPPED" as const, health: "UNKNOWN" as const };
   }

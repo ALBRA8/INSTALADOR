@@ -21,10 +21,15 @@ import { runInstall } from "@/lib/albra/core/installer";
 import { runUpdate, rollbackLastUpdate } from "@/lib/albra/core/updater";
 import { runUninstall } from "@/lib/albra/core/uninstaller";
 import { getOrCreateServiceKey } from "@/lib/albra/core/access-key";
+// ORDEN MAESTRA F2: despacho real de productos contenedorizados
+import { getContainerDeployment } from "@/lib/albra/core/registry";
+import { runContainerLifecycle } from "@/lib/albra/core/container-lifecycle";
+import { uninstallContainerDeployment } from "@/lib/albra/core/container-deploy";
 import { createBackup, restoreBackup } from "@/lib/albra/core/backup";
 import { collectDiagnostics } from "@/lib/albra/core/diagnostics";
 import { getLatestVersion } from "@/lib/albra/products/catalog";
 import type { DataMode } from "@/lib/albra/contracts";
+import { db } from "@/lib/db";
 import {
   EEC_OPS_CONTRACT_VERSION,
   EecOperation,
@@ -112,6 +117,9 @@ const UpdateParams = z.object({
 });
 const UninstallParams = z.object({
   dataMode: z.enum(["KEEP", "EXPORT", "DELETE"]).default("KEEP"),
+  /** SOLO productos contenedorizados: elimina los volúmenes de datos del proyecto.
+   *  Requiere confirmación explícita del operador en el PANEL (default false). */
+  purgeData: z.boolean().default(false),
 });
 const BackupParams = z.object({
   kind: z.enum(["PRE_UPDATE", "MANUAL", "PRE_UNINSTALL"]).default("MANUAL"),
@@ -210,24 +218,54 @@ export async function executeOps(raw: unknown, actor = "EEC"): Promise<EecOpsRes
         break;
       }
       case "START": {
+        // F2: producto contenedorizado → ciclo de vida real de Compose.
+        if (await getContainerDeployment(request.productId)) {
+          const r = await runContainerLifecycle(request.productId, "START");
+          if (!r.ok) throw new Error(r.error ?? "CONTAINER_START_FAILED");
+          result = { state: { state: r.observedState, pid: null, port: null }, detail: `${r.services.length} servicios · salud ${r.health}` };
+          break;
+        }
         const res = await startProduct(request.productId);
         if (!res.ok) throw new Error(res.error ?? "START_FAILED");
         result = { state: { state: "RUNNING", pid: res.pid ?? null, port: res.port ?? null }, detail: res.detail };
         break;
       }
       case "STOP": {
+        if (await getContainerDeployment(request.productId)) {
+          const r = await runContainerLifecycle(request.productId, "STOP");
+          if (!r.ok) throw new Error(r.error ?? "CONTAINER_STOP_FAILED");
+          result = { state: { state: "STOPPED" }, detail: `${r.services.length} servicios detenidos (volúmenes conservados)` };
+          break;
+        }
         const res = await stopProduct(request.productId);
         if (!res.ok) throw new Error(res.error ?? "STOP_FAILED");
         result = { state: { state: "STOPPED" }, detail: res.detail };
         break;
       }
       case "RESTART": {
+        if (await getContainerDeployment(request.productId)) {
+          const r = await runContainerLifecycle(request.productId, "RESTART");
+          if (!r.ok) throw new Error(r.error ?? "CONTAINER_RESTART_FAILED");
+          result = { state: { state: r.observedState, pid: null, port: null }, detail: `${r.services.length} servicios · salud ${r.health}` };
+          break;
+        }
         const res = await restartProduct(request.productId);
         if (!res.ok) throw new Error(res.error ?? "RESTART_FAILED");
         result = { state: { state: "RUNNING", pid: res.pid ?? null, port: res.port ?? null }, detail: res.detail };
         break;
       }
       case "HEALTH": {
+        if (await getContainerDeployment(request.productId)) {
+          const r = await runContainerLifecycle(request.productId, "HEALTH");
+          result = {
+            health: {
+              overall: r.health === "HEALTHY" ? "HEALTHY" : r.health === "DEGRADED" ? "DEGRADED" : "FAILED",
+              checks: r.services.map(s => ({ name: s.service, status: s.health === "healthy" ? "PASS" : s.state === "running" ? "WARN" : "FAIL", detail: `${s.state}${s.health ? `/${s.health}` : ""}` })),
+              checkedAt: new Date().toISOString(),
+            },
+          };
+          break;
+        }
         const health = await runHealthChecks(request.productId);
         result = { health };
         break;
@@ -266,6 +304,24 @@ export async function executeOps(raw: unknown, actor = "EEC"): Promise<EecOpsRes
       case "UNINSTALL": {
         const params = UninstallParams.safeParse(request.params ?? {});
         if (!params.success) return reject("VALIDATION_ERROR", firstIssueMessage(params.error));
+        // F2: producto contenedorizado → retirar servicios SIN tocar datos;
+        // volúmenes solo con purgeData=true (confirmación explícita del operador).
+        if (await getContainerDeployment(request.productId)) {
+          const r = await uninstallContainerDeployment({
+            productId: request.productId,
+            purgeData: params.data.purgeData === true && params.data.dataMode === "DELETE",
+          });
+          await db.installedProduct.deleteMany({ where: { productId: request.productId } });
+          result = {
+            detail: {
+              containerized: true,
+              servicesRemoved: true,
+              dataPreserved: !params.data.purgeData,
+              volumesRemoved: r.volumesRemoved,
+            },
+          };
+          break;
+        }
         const res = await runUninstall(request.productId, params.data.dataMode as DataMode);
         result = { runId: res.runId, ...(res.exportPath ? { detail: { exportPath: res.exportPath } } : {}) };
         break;
@@ -278,6 +334,37 @@ export async function executeOps(raw: unknown, actor = "EEC"): Promise<EecOpsRes
       case "STATUS": {
         const installed = await getInstalled(request.productId);
         if (!installed) throw new Error("PRODUCT_NOT_INSTALLED");
+        // F2: evidencia REAL del despliegue contenedorizado cuando aplica.
+        const container = await getContainerDeployment(request.productId);
+        if (container) {
+          const r = await runContainerLifecycle(request.productId, "STATUS");
+          result = {
+            state: {
+              productId: installed.productId,
+              displayName: installed.displayName,
+              version: installed.version,
+              state: r.observedState === "RUNNING" ? "RUNNING" : r.observedState === "STOPPED" ? "STOPPED" : "INSTALLED",
+              health: r.health === "HEALTHY" ? "HEALTHY" : r.health === "DEGRADED" ? "DEGRADED" : r.health === "FAILED" ? "FAILED" : "UNKNOWN",
+              pid: null,
+              port: null,
+              osState: "CONTAINERIZED",
+              evidence: {
+                pid: null,
+                port: null,
+                startedAt: null,
+                uptimeS: null,
+                identityVerified: null,
+                portServing: null,
+                healthProbe: `compose:${container.projectName} → ${r.services.filter(s => s.state === "running").length}/${r.services.length} servicios ${r.health.toLowerCase()}`,
+                lastHeartbeatAt: container.lastObservedAt ? container.lastObservedAt.toISOString() : null,
+              },
+              lastExitEvidence: installed.lastExitEvidence,
+              lastHealthAt: container.lastObservedAt ? container.lastObservedAt.toISOString() : null,
+              lastHealthSnapshot: { overall: r.health, at: (container.lastObservedAt ?? new Date()).toISOString() },
+            },
+          };
+          break;
+        }
         const evidence = await getRuntimeEvidence(request.productId);
         const snapshot = await latestHealth(request.productId);
         result = {

@@ -43,6 +43,41 @@ model InstalledProduct {
   containerDeployment ContainerDeployment?
 }
 
+model InstallModuleProgress {
+  id         String    @id @default(cuid())
+  runId      String
+  moduleKey  String
+  moduleType String // PROJECT | DEPENDENCY | RUNTIME | SOURCE
+  label      String
+  status     String    @default("PENDING") // PENDING | RUNNING | SUCCESS | FAILED | SKIPPED
+  percent    Int       @default(0)
+  detail     String?
+  order      Int       @default(0)
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([runId])
+  @@unique([runId, moduleKey])
+}
+
+model LicenseValidation {
+  id          String    @id @default(cuid())
+  runId       String?
+  packageId   String
+  keyHash     String
+  keyLast4    String
+  outcome     String // VALIDATED | REJECTED
+  reasonCode  String?
+  licensee    String?
+  plan        String?
+  apiEndpoint String
+  durationMs  Int?
+  detail      Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([packageId, createdAt])
+}
+
 model ContainerDeployment {
   id                 String   @id @default(cuid())
   productId          String   @unique

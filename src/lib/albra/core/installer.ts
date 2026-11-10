@@ -29,9 +29,11 @@ import { audit } from "@/lib/albra/core/audit";
 // V3: PUERTA DE ACCESO — validación obligatoria de la clave única del proyecto
 import { validateProjectAccessKey } from "@/lib/albra/core/access-key";
 // V2 WAVE C: fuentes GitHub + dependencias + parche de contrato de origen
-import { parseSourceContract, type RuntimeRequirement, type InstallScriptsPolicy } from "@/lib/albra/contracts/source";
+import { parseSourceContract, type RuntimeRequirement, type InstallScriptsPolicy, type ContainerDeploymentSource } from "@/lib/albra/contracts/source";
 import { prepareDependencies, AlbraDepsError, type DependencyModuleEvent } from "@/lib/albra/core/deps";
 import { readScriptsTrustState, type GithubRefType } from "@/lib/albra/sources/github";
+// ORDEN MAESTRA F2: despliegue Docker Compose integrado al motor
+import { installContainerDeployment, dockerComposePreflightForInstall } from "@/lib/albra/core/container-deploy";
 
 const STEP_DEFS = [
   { step: "DISCOVER", label: "Descubriendo paquetes disponibles" },
@@ -177,19 +179,19 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
     // V2 WAVE C: extensiones de origen declaradas por el paquete (manifest.metadata)
     let declaredRuntimes: RuntimeRequirement[] = [];
     let declaredScripts: InstallScriptsPolicy["scripts"] = [];
+    // F2: despliegue contenedorizado declarado por el paquete (si aplica)
+    let declaredDeployment: ContainerDeploymentSource | null = null;
     // V3: traduce eventos de módulos (runtime/dependencia) a unidades del run
     // → la UI dibuja UNA barra de progreso independiente por cada módulo.
-    const moduleSink = (step: string) => ({
-      onModule: async (ev: DependencyModuleEvent): Promise<void> => {
-        if (ev.phase === "start") {
-          await run.unitStart(step, { id: ev.id, label: ev.label, kind: ev.kind, detail: ev.detail });
-        } else if (ev.phase === "progress") {
-          await run.unitProgress(step, ev.id, ev.progress ?? 0, ev.detail);
-        } else {
-          await run.unitDone(step, ev.id, ev.status ?? "SUCCESS", ev.detail);
-        }
-      },
-    });
+    const moduleSink = (step: string) => async (ev: DependencyModuleEvent): Promise<void> => {
+      if (ev.phase === "start") {
+        await run.unitStart(step, { id: ev.id, label: ev.label, kind: ev.kind, detail: ev.detail });
+      } else if (ev.phase === "progress") {
+        await run.unitProgress(step, ev.id, ev.progress ?? 0, ev.detail);
+      } else {
+        await run.unitDone(step, ev.id, ev.status ?? "SUCCESS", ev.detail);
+      }
+    };
     try {
       await withLock(packageId, async () => {
         // DISCOVER
@@ -251,6 +253,7 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
         const sourcePatch = patchParsed.ok ? patchParsed.patch : undefined;
         declaredRuntimes = sourcePatch?.runtimes ?? [];
         declaredScripts = sourcePatch?.install?.scripts ?? [];
+        declaredDeployment = sourcePatch?.deployment ?? null;
         const dlPath = path.join(PATHS.downloads, fileName);
         writeFileAtomic(dlPath, JSON.stringify(pkg));
         await run.done("DOWNLOAD", "SUCCESS", `Paquete descargado (${(fs.statSync(dlPath).size / 1024).toFixed(1)} KB)`);
@@ -272,7 +275,14 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
         fs.rmSync(stagingDir, { recursive: true, force: true });
         fs.mkdirSync(stagingDir, { recursive: true });
         let prepareDetail = "Área de staging creada";
-        if (declaredRuntimes && declaredRuntimes.length > 0) {
+        if (declaredDeployment) {
+          // F2: preflight Docker FAIL-CLOSED antes de gastar trabajo.
+          const dpf = await dockerComposePreflightForInstall();
+          if (!dpf.ok) {
+            throw new Error(`DOCKER_PREFLIGHT_FAILED — ${dpf.issues.filter(i => i.severity === "BLOCKER").map(i => i.message).join(" | ")}`);
+          }
+          prepareDetail = `Área de staging creada · despliegue contenedorizado: Docker ${dpf.dockerVersion ?? "?"} + Compose ${dpf.composeVersion ?? "?"}`;
+        } else if (declaredRuntimes && declaredRuntimes.length > 0) {
           // V2 WAVE C: verificación temprana de runtimes requeridos (fail-fast
           // antes de gastar trabajo; staging aún vacío → solo detección).
           // V3: cada runtime se reporta como MÓDULO con barra propia.
@@ -325,9 +335,12 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
         stagedContractValid = parseProductContract(pkg.contract).ok;
         if (!stagedContractValid) throw new Error("CONTRACT_INVALID_AFTER_STAGE");
         let installDetail = `${pkg.payload.application.length} archivos verificados en staging`;
+        if (declaredDeployment) {
+          installDetail += " · despliegue contenedorizado (compose del paquete)";
+        }
         // V2 WAVE C (a): preparación de dependencias AISLADA en staging
         // (post-staging, pre-commit: si falla, el rollback elimina staging).
-        if (declaredRuntimes && declaredRuntimes.length > 0) {
+        if (!declaredDeployment && declaredRuntimes && declaredRuntimes.length > 0) {
           const deps = await prepareDependencies({
             appDir: stagingDir,
             runtimes: declaredRuntimes,
@@ -423,26 +436,55 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
         });
         await run.done("REGISTER", "SUCCESS", `Registrado v${pkg.manifest.version} (commit transaccional completado)${opts?.origin ? ` · origen github ${opts.origin.repo}@${opts.origin.refType}:${opts.origin.ref}` : ""}`);
 
-        // START
+        // START — F2: productos contenedorizados despliegan compose; locales, proceso.
         await run.begin("START");
         await sleep(pace);
-        const startRes = await startProductCore(packageId);
-        if (!startRes.ok) throw new Error(`SERVICE_START_FAILED — ${startRes.error}`);
-        await run.done("START", "SUCCESS", `Servicio activo en puerto ${startRes.port}`);
+        let startPort: number | null = null;
+        const deployment = declaredDeployment;
+        if (deployment) {
+          const composeFile = pkg.payload.application.find(f => f.path === deployment.composeFile);
+          if (!composeFile) throw new Error("COMPOSE_FILE_MISSING_IN_PACKAGE");
+          await run.unitStart("START", { id: "docker", label: "Despliegue Docker Compose", kind: "runtime", detail: "preparando red y secretos" });
+          let stepCount = 0;
+          const deployRes = await installContainerDeployment({
+            productId: packageId,
+            version: pkg.manifest.version,
+            composeYaml: composeFile.content,
+            deployment,
+            onProgress: async (message) => {
+              stepCount += 1;
+              await run.unitProgress("START", "docker", Math.min(95, stepCount * 12), message);
+            },
+          });
+          startPort = null; // sin puertos publicados al host por defecto (red albra-agents)
+          await run.unitDone("START", "docker", "SUCCESS", `${deployRes.pinnedDigests.length} imágenes fijadas por digest · salud ${deployRes.health}`);
+          await run.done("START", "SUCCESS", `Contenedores activos (proyecto ${deployRes.projectName}) en red albra-agents`);
+        } else {
+          const startRes = await startProductCore(packageId);
+          if (!startRes.ok) throw new Error(`SERVICE_START_FAILED — ${startRes.error}`);
+          startPort = startRes.port ?? null;
+          await run.done("START", "SUCCESS", `Servicio activo en puerto ${startRes.port}`);
+        }
 
         // HEALTH CHECK
         await run.begin("HEALTH");
         await sleep(pace);
-        const health = await runHealthChecks(packageId);
-        if (health.overall === "FAILED") throw new Error("HEALTH_CHECK_FAILED");
-        await run.done("HEALTH", health.overall === "HEALTHY" ? "SUCCESS" : "WARNING", `Salud: ${health.overall} (${health.checks.filter(c => c.status === "PASS").length}/${health.checks.length} checks OK)`);
+        if (declaredDeployment) {
+          // F2: la salud REAL ya fue verificada con healthchecks de Compose
+          // (installContainerDeployment falla si no se consolida).
+          await run.done("HEALTH", "SUCCESS", "Salud verificada vía healthchecks de Compose (app healthy)");
+        } else {
+          const health = await runHealthChecks(packageId);
+          if (health.overall === "FAILED") throw new Error("HEALTH_CHECK_FAILED");
+          await run.done("HEALTH", health.overall === "HEALTHY" ? "SUCCESS" : "WARNING", `Salud: ${health.overall} (${health.checks.filter(c => c.status === "PASS").length}/${health.checks.length} checks OK)`);
+        }
 
         // COMPLETE
         await run.begin("COMPLETE");
         await sleep(pace);
         await run.done("COMPLETE", "SUCCESS", "Instalación completada");
-        await run.finish("SUCCESS", { version: pkg.manifest.version, port: startRes.port });
-        await audit({ type: "INSTALL_COMPLETED", productId: packageId, detail: { version: pkg.manifest.version, port } });
+        await run.finish("SUCCESS", { version: pkg.manifest.version, port: startPort });
+        await audit({ type: "INSTALL_COMPLETED", productId: packageId, detail: { version: pkg.manifest.version, port: startPort, containerized: Boolean(declaredDeployment) } });
       });
     } catch (e) {
       const message = (e as Error).message;

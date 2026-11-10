@@ -59,7 +59,8 @@ export async function createGeneratedDockerEnvFile(input: {
   try {
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const parent = await fs.realpath(path.dirname(target));
-    if (!inside(root, parent)) {
+    // El .env puede vivir DIRECTAMENTE en la raíz del producto (parent === root).
+    if (parent !== root && !inside(root, parent)) {
       return { ok: false, code: "ENV_FILE_INVALID", message: "Environment file parent may not escape the product directory." };
     }
     const contents = input.secretKeys.map(key => `${key}=${quoteEnvValue(randomBytes(32).toString("base64url"))}`).join("\n") + "\n";

@@ -53,7 +53,7 @@ export interface DependencyModuleEvent {
   kind: "runtime" | "dependency";
   phase: "start" | "progress" | "done";
   progress?: number;
-  status?: "SUCCESS" | "WARNING" | "FAILURE";
+  status?: "SUCCESS" | "WARNING" | "FAILURE" | "SKIPPED";
   detail?: string;
 }
 

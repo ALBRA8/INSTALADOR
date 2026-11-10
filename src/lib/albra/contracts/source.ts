@@ -117,13 +117,62 @@ export const InstallScriptsPolicySchema = z.object({
 });
 export type InstallScriptsPolicy = z.infer<typeof InstallScriptsPolicySchema>;
 
+// ───────────────────────── Docker Compose deployment ─────────────────────────
+
+/**
+ * ORDEN MAESTRA F2 — Declaración de DESPLIEGUE DOCKER COMPOSE dentro del
+ * parche de contrato de fuente. El paquete declara REFERENCIAS de imagen
+ * (no digests): el INSTALADOR fija el digest real en tiempo de despliegue
+ * (pull + inspect → RepoDigests) y materializa el descriptor estricto.
+ */
+export const ContainerDeploymentSourceSchema = z.object({
+  kind: z.literal("docker-compose"),
+  /** Compose del paquete (relativo al payload). Sin rutas absolutas ni traversal. */
+  composeFile: z.string().refine(
+    v => !v.startsWith("/") && !v.includes("\\") && v.split("/").every(s => s.length > 0 && s !== "." && s !== "..") && /\.ya?ml$/i.test(v),
+    "composeFile debe ser una ruta relativa POSIX a un .yml/.yaml",
+  ),
+  /** .env generado por el instalador (modo 0600), relativo al directorio del producto. */
+  envFile: z.string().refine(
+    v => !v.startsWith("/") && !v.includes("\\") && v.split("/").every(s => s.length > 0 && s !== "." && s !== ".."),
+    "envFile debe ser una ruta relativa POSIX",
+  ),
+  projectName: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/),
+  networkName: z.literal("albra-agents").default("albra-agents"),
+  /** Secretos que el INSTALADOR genera (random 32B) y custodia. Nunca del paquete. */
+  generatedSecretKeys: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/)).min(1),
+  /** Imágenes por servicio: referencia OCI que el instalador FIJARÁ por digest. */
+  images: z.array(z.object({
+    service: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/),
+    /** Variable de interpolación del compose (p. ej. CHISMOSO_IMAGE). */
+    imageVar: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/),
+    /** Referencia OCI base (repo:tag o repo@sha256:…). Sin espacios ni metacaracteres. */
+    ref: z.string().min(1).refine(
+      v => !/\s/.test(v) && !/[$;&|`<>\\'"]/.test(v),
+      "ref debe ser una referencia OCI limpia (sin espacios ni metacaracteres de shell)",
+    ),
+  })).min(1),
+  /** Timeout de espera de salud (segundos). */
+  healthTimeoutSeconds: z.number().int().min(10).max(900).default(180),
+}).strict().superRefine((v, ctx) => {
+  const seenSvc = new Set<string>(), seenVar = new Set<string>();
+  for (const img of v.images) {
+    if (seenSvc.has(img.service)) ctx.addIssue({ code: "custom", path: ["images"], message: `Servicio duplicado en images: ${img.service}` });
+    seenSvc.add(img.service);
+    if (seenVar.has(img.imageVar)) ctx.addIssue({ code: "custom", path: ["images"], message: `imageVar duplicada: ${img.imageVar}` });
+    seenVar.add(img.imageVar);
+  }
+});
+export type ContainerDeploymentSource = z.infer<typeof ContainerDeploymentSourceSchema>;
+
 // ───────────────────────── Patch compuesto ─────────────────────────
 
-/** Extensiones opcionales del contrato: source + runtimes + install. */
+/** Extensiones opcionales del contrato: source + runtimes + install + deployment. */
 export const SourceContractPatchSchema = z.object({
   source: GithubSourceSchema.optional(),
   runtimes: z.array(RuntimeRequirementSchema).optional(),
   install: InstallScriptsPolicySchema.optional(),
+  deployment: ContainerDeploymentSourceSchema.optional(),
 });
 export type SourceContractPatch = z.infer<typeof SourceContractPatchSchema>;
 

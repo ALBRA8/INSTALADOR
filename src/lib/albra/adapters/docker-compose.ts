@@ -234,6 +234,8 @@ export async function runDockerCompose(opts: {
   projectName: string;
   action: DockerComposeAction;
   envFile?: string;
+  /** Inyección para pruebas (mismo contrato que runDocker). */
+  runner?: (args: string[]) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
 }): Promise<DockerCommandResult> {
   if (!validateProjectName(opts.projectName)) {
     return { ok: false, code: "PROJECT_NAME_INVALID", stdout: "", stderr: "Invalid Compose project name.", exitCode: null };
@@ -262,5 +264,11 @@ export async function runDockerCompose(opts: {
     pull: ["pull"],
   };
 
-  return runDocker([...base, ...actionArgs[opts.action]], paths.root);
+  const exec = opts.runner
+    ? async (args: string[]): Promise<DockerCommandResult> => {
+        const r = await opts.runner!(args);
+        return { ok: r.ok, code: r.ok ? "OK" : "DOCKER_COMMAND_FAILED", stdout: r.stdout, stderr: r.stderr, exitCode: r.ok ? 0 : 1 };
+      }
+    : runDocker;
+  return exec([...base, ...actionArgs[opts.action]], paths.root);
 }
