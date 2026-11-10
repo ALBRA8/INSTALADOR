@@ -8,6 +8,7 @@ const valid = {
   envFile: ".env.albra",
   projectName: "albra-chismoso",
   networkName: "albra-agents",
+  generatedSecretKeys: ["CHISMOSO_APP_SECRET", "CHISMOSO_API_TOKEN"],
   imageDigests: [
     { service: "app", image: `ghcr.io/albra/chismoso@${digest}` },
     { service: "redis", image: `redis@${digest}` },
