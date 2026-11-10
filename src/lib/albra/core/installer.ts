@@ -26,11 +26,9 @@ import { startProductCore } from "@/lib/albra/core/runtime";
 import { Run, sleep, registerRunPromise } from "@/lib/albra/core/runs";
 import { log } from "@/lib/albra/core/logger";
 import { audit } from "@/lib/albra/core/audit";
-// V3: PUERTA DE ACCESO — validación obligatoria de la clave única del proyecto
-import { validateProjectAccessKey } from "@/lib/albra/core/access-key";
 // V2 WAVE C: fuentes GitHub + dependencias + parche de contrato de origen
 import { parseSourceContract, type RuntimeRequirement, type InstallScriptsPolicy } from "@/lib/albra/contracts/source";
-import { prepareDependencies, AlbraDepsError, type DependencyModuleEvent } from "@/lib/albra/core/deps";
+import { prepareDependencies, AlbraDepsError } from "@/lib/albra/core/deps";
 import { readScriptsTrustState, type GithubRefType } from "@/lib/albra/sources/github";
 
 const STEP_DEFS = [
@@ -38,7 +36,6 @@ const STEP_DEFS = [
   { step: "PREFLIGHT", label: "Verificando requisitos del sistema" },
   { step: "PLAN", label: "Generando plan de instalación" },
   { step: "CONFIRM", label: "Confirmando operaciones" },
-  { step: "ACCESS", label: "Validando clave única de acceso (API externa)" },
   { step: "DOWNLOAD", label: "Descargando paquete" },
   { step: "VERIFY", label: "Verificando hash y firma" },
   { step: "PREPARE", label: "Preparando instalación transaccional" },
@@ -51,17 +48,6 @@ const STEP_DEFS = [
   { step: "HEALTH", label: "Verificación de salud" },
   { step: "COMPLETE", label: "Finalizando" },
 ];
-
-/**
- * Error de la puerta de acceso: código estable + userMessage en español.
- * BLOQUEA la instalación antes de descargar cualquier paquete (fail-closed).
- */
-function accessError(code: string, userMessage?: string): Error & { code?: string; userMessage?: string } {
-  const e = new Error(`${code} — instalación bloqueada por la puerta de acceso`) as Error & { code?: string; userMessage?: string };
-  e.code = code;
-  e.userMessage = userMessage ?? "La instalación quedó bloqueada: la clave única de acceso no pudo validarse con la API externa de licenciamiento.";
-  return e;
-}
 
 export interface PreflightIssue {
   code: string;
@@ -146,13 +132,6 @@ export async function preflight(packageId: string): Promise<PreflightReport> {
     issues.push({ code: "PERMISSION_DENIED", severity: "BLOCKER", message: "Sin permisos de escritura en el directorio de productos" });
   }
 
-  // V3: puerta de acceso — aviso en preflight (el bloqueo real ocurre antes del DOWNLOAD)
-  issues.push({
-    code: "ACCESS_GATE",
-    severity: "WARNING",
-    message: "Puerta de acceso activa: la clave única del proyecto se validará vía API externa antes de descargar el paquete",
-  });
-
   return { ok: !issues.some(i => i.severity === "BLOCKER"), issues, platform, assignedPort };
 }
 
@@ -164,7 +143,7 @@ export interface GithubInstallOrigin {
   commitSha?: string | null;
 }
 
-export async function runInstall(packageId: string, opts?: { paceMs?: number; origin?: GithubInstallOrigin; accessKey?: string }): Promise<{ runId: string }> {
+export async function runInstall(packageId: string, opts?: { paceMs?: number; origin?: GithubInstallOrigin }): Promise<{ runId: string }> {
   const pace = opts?.paceMs ?? 220;
   const run = await Run.create("INSTALL", packageId, STEP_DEFS);
   const runId = run.id;
@@ -177,19 +156,6 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
     // V2 WAVE C: extensiones de origen declaradas por el paquete (manifest.metadata)
     let declaredRuntimes: RuntimeRequirement[] = [];
     let declaredScripts: InstallScriptsPolicy["scripts"] = [];
-    // V3: traduce eventos de módulos (runtime/dependencia) a unidades del run
-    // → la UI dibuja UNA barra de progreso independiente por cada módulo.
-    const moduleSink = (step: string) => ({
-      onModule: async (ev: DependencyModuleEvent): Promise<void> => {
-        if (ev.phase === "start") {
-          await run.unitStart(step, { id: ev.id, label: ev.label, kind: ev.kind, detail: ev.detail });
-        } else if (ev.phase === "progress") {
-          await run.unitProgress(step, ev.id, ev.progress ?? 0, ev.detail);
-        } else {
-          await run.unitDone(step, ev.id, ev.status ?? "SUCCESS", ev.detail);
-        }
-      },
-    });
     try {
       await withLock(packageId, async () => {
         // DISCOVER
@@ -220,20 +186,6 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
         await run.begin("CONFIRM");
         await sleep(pace);
         await run.done("CONFIRM", "SUCCESS", "Confirmado por el usuario desde el Launcher");
-
-        // ACCESS — PUERTA OBLIGATORIA (V3): la clave única de acceso del
-        // proyecto se valida contra la API EXTERNA de licenciamiento ANTES
-        // de descargar cualquier paquete. Sin veredicto válido → BLOQUEO.
-        await run.begin("ACCESS");
-        await sleep(pace);
-        if (!opts?.accessKey || opts.accessKey.trim().length === 0) {
-          throw accessError("ACCESS_KEY_REQUIRED", "Se requiere la clave única de acceso del proyecto para descargar e instalar paquetes. Solicítala al licenciante e introdúcela en el instalador.");
-        }
-        const access = await validateProjectAccessKey({ packageId, accessKey: opts.accessKey });
-        if (!access.ok) {
-          throw accessError(access.code, access.userMessage);
-        }
-        await run.done("ACCESS", "SUCCESS", `Clave verificada vía API externa · plan ${access.plan ?? "—"}${access.licensee ? ` · ${access.licensee}` : ""}`);
 
         // DOWNLOAD (desde la bóveda local → downloads/)
         await run.begin("DOWNLOAD");
@@ -275,12 +227,10 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
         if (declaredRuntimes && declaredRuntimes.length > 0) {
           // V2 WAVE C: verificación temprana de runtimes requeridos (fail-fast
           // antes de gastar trabajo; staging aún vacío → solo detección).
-          // V3: cada runtime se reporta como MÓDULO con barra propia.
           const check = await prepareDependencies({
             appDir: stagingDir,
             runtimes: declaredRuntimes,
             log: (message, data) => log({ channel: "SYSTEM", productId: packageId, message, data }),
-            onModule: moduleSink("PREPARE"),
           });
           prepareDetail = `Área de staging creada · runtimes requeridos: ${check.summary}`;
         }
@@ -304,17 +254,10 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
             throw blocked;
           }
         }
-        for (let fi = 0; fi < pkg.payload.application.length; fi++) {
-          const file = pkg.payload.application[fi];
-          // V3: progreso POR ARCHIVO en su propio módulo (barra visible).
-          await run.unitStart("INSTALL", { id: "files", label: `Archivos de aplicación (${pkg.payload.application.length})`, kind: "files", detail: `${fi}/${pkg.payload.application.length}` });
+        for (const file of pkg.payload.application) {
           const target = path.join(stagingDir, file.path);
           fs.mkdirSync(path.dirname(target), { recursive: true });
           fs.writeFileSync(target, file.content, "utf-8");
-          await run.unitProgress("INSTALL", "files", ((fi + 1) / pkg.payload.application.length) * 100, `${fi + 1}/${pkg.payload.application.length} archivos escritos en staging`);
-        }
-        if (pkg.payload.application.length > 0) {
-          await run.unitDone("INSTALL", "files", "SUCCESS", `${pkg.payload.application.length} archivos verificados en staging`);
         }
         // Verificación de archivos staged
         for (const file of pkg.payload.application) {
@@ -332,7 +275,6 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
             appDir: stagingDir,
             runtimes: declaredRuntimes,
             log: (message, data) => log({ channel: "SYSTEM", productId: packageId, message, data }),
-            onModule: moduleSink("INSTALL"),
           });
           installDetail += ` · dependencias: ${deps.summary}`;
         }
@@ -449,11 +391,6 @@ export async function runInstall(packageId: string, opts?: { paceMs?: number; or
       // V2 WAVE C: los errores de dependencias llevan userMessage en español
       if (e instanceof AlbraDepsError) {
         await log({ channel: "SYSTEM", productId: packageId, level: "error", message: `${e.code}: ${e.userMessage}` });
-      }
-      // V3: errores de la puerta de acceso (código + userMessage adjuntos)
-      const accessUm = (e as { userMessage?: string }).userMessage;
-      if (accessUm && !(e instanceof AlbraDepsError)) {
-        await log({ channel: "SYSTEM", productId: packageId, level: "error", message: accessUm });
       }
       // ROLLBACK transaccional: eliminar staging y volver a estado consistente.
       try {

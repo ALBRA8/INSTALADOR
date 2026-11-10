@@ -141,3 +141,7 @@ export function getDeploymentAdapter(): DeploymentAdapter {
   if (process.platform === "win32") return new WindowsLocalAdapter();
   return new LocalDevAdapter();
 }
+
+// Docker Compose host driver (used by the PANEL deployment workflow).
+export { dockerComposePreflight, runDockerCompose } from "./docker-compose";
+export type { DockerComposeAction, DockerCommandResult, DockerPreflightResult } from "./docker-compose";

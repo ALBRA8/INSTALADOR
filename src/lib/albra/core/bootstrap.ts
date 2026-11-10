@@ -15,7 +15,6 @@ import {
 } from "@/lib/albra/package/format";
 import { getDeploymentAdapter } from "@/lib/albra/adapters";
 import { getLatestVersion } from "@/lib/albra/products/catalog";
-import { getOrCreateServiceKey } from "@/lib/albra/core/access-key";
 import { reconcileAll } from "@/lib/albra/core/process-runtime";
 
 let bootstrapPromise: Promise<void> | null = null;
@@ -91,15 +90,6 @@ async function doBootstrap(): Promise<void> {
     create: { key: "platform:latest", value: { crm: getLatestVersion("crm"), leads: getLatestVersion("leads") } as object },
     update: { value: { crm: getLatestVersion("crm"), leads: getLatestVersion("leads") } as object },
   });
-
-  // ACCESS GATE: clave de SERVICIO para operaciones internas (certificación,
-  // ops EEC). Se valida por la MISMA API externa de licenciamiento — las
-  // operaciones internas no tienen bypass de la puerta de acceso.
-  try {
-    await getOrCreateServiceKey();
-  } catch {
-    /* la puerta nunca bloquea el bootstrap */
-  }
 
   // V2 REAL RUNTIME: reconciliación DB ↔ sistema operativo al arrancar el INSTALADOR.
   // Detecta procesos huérfanos (los adopta), crashes (evidencia) y estados perdidos.

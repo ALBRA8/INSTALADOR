@@ -8,8 +8,8 @@ import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { CATALOG, getLatestVersion } from "@/lib/albra/products/catalog";
 import { listInstalled, isLocked } from "@/lib/albra/core/registry";
 import { db } from "@/lib/db";
-import { errorResponse, asArray, semverGt } from "@/lib/albra/api-serialize";
-import type { CatalogItem, ExitEvidenceDTO, LifecycleStateDTO, RunStepDTO } from "@/lib/albra/api-types";
+import { errorResponse, semverGt } from "@/lib/albra/api-serialize";
+import type { CatalogItem, ExitEvidenceDTO, LifecycleStateDTO } from "@/lib/albra/api-types";
 
 export const dynamic = "force-dynamic";
 
@@ -19,28 +19,6 @@ export async function GET() {
 
     const installedList = await listInstalled();
     const installedMap = new Map(installedList.map(p => [p.productId, p]));
-
-    // V3: progreso POR PROYECTO — runs activos (uno visible por producto).
-    // % global del run = pasos cerrados + mitad del paso en curso.
-    const activeRuns = await db.lifecycleRun.findMany({
-      where: { status: "RUNNING" },
-      orderBy: { startedAt: "desc" },
-      take: 50,
-    });
-    const progressByProduct = new Map<string, { pct: number; label: string }>();
-    for (const r of activeRuns) {
-      if (!r.productId || progressByProduct.has(r.productId)) continue;
-      const steps = asArray<RunStepDTO>(r.steps);
-      if (steps.length === 0) continue;
-      const done = steps.filter(s => s.status === "SUCCESS" || s.status === "WARNING" || s.status === "SKIPPED" || s.status === "FAILURE").length;
-      const running = steps.some(s => s.status === "RUNNING");
-      const pct = Math.min(99, Math.round(((done + (running ? 0.5 : 0)) / steps.length) * 100));
-      const opLabel: Record<string, string> = {
-        INSTALL: "Instalando", UPDATE: "Actualizando", REPAIR: "Reparando",
-        UNINSTALL: "Desinstalando", START: "Iniciando", STOP: "Deteniendo",
-      };
-      progressByProduct.set(r.productId, { pct, label: opLabel[r.operation] ?? r.operation });
-    }
 
     const products: CatalogItem[] = [];
     for (const entry of CATALOG) {
@@ -81,9 +59,6 @@ export async function GET() {
         certified: Boolean(cert?.passed),
         pid: inst?.pid ?? null,
         lastExitEvidence,
-        // V3: progreso por proyecto (barra en la tarjeta mientras opera)
-        progress: progressByProduct.get(entry.productId)?.pct ?? null,
-        progressLabel: progressByProduct.get(entry.productId)?.label ?? null,
       });
     }
 

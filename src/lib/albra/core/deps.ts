@@ -43,20 +43,6 @@ export interface DependencyPreparation {
   summary: string;
 }
 
-/**
- * V3 — Evento de progreso POR MÓDULO: un runtime, un gestor de dependencias
- * (bun/npm/pip)… La UI dibuja UNA barra independiente por cada módulo.
- */
-export interface DependencyModuleEvent {
-  id: string;
-  label: string;
-  kind: "runtime" | "dependency";
-  phase: "start" | "progress" | "done";
-  progress?: number;
-  status?: "SUCCESS" | "WARNING" | "FAILURE";
-  detail?: string;
-}
-
 export interface RuntimeRequirementInput {
   id: string;
   semver: string;
@@ -197,8 +183,6 @@ export interface PrepareDependenciesOptions {
   runtimes: RuntimeRequirementInput[];
   /** Callback de logging (p. ej. al step del run). Default: log() de plataforma. */
   log?: (message: string, data?: unknown) => void | Promise<void>;
-  /** V3: callback de progreso por módulo (runtime/dependencia) para la UI. */
-  onModule?: (ev: DependencyModuleEvent) => Promise<void>;
 }
 
 /**
@@ -211,9 +195,6 @@ export async function prepareDependencies(opts: PrepareDependenciesOptions): Pro
   const say = async (message: string, data?: unknown): Promise<void> => {
     if (opts.log) await opts.log(message, data);
     else await coreLog({ channel: "SYSTEM", message, data });
-  };
-  const emit = async (ev: DependencyModuleEvent): Promise<void> => {
-    if (opts.onModule) await opts.onModule(ev);
   };
   const detections: RuntimeDetection[] = [];
   const installs: DependencyPreparation["installs"] = [];
@@ -234,19 +215,15 @@ export async function prepareDependencies(opts: PrepareDependenciesOptions): Pro
   // 1) Runtimes declarados: tecnología sin adaptador → UNSUPPORTED_RUNTIME (explícito)
   for (const rt of opts.runtimes ?? []) {
     if (!(rt.id in RUNTIME_SUPPORT_MATRIX)) {
-      await emit({ id: `runtime:${rt.id}`, label: `Runtime ${rt.id}`, kind: "runtime", phase: "start", detail: "sin adaptador en ALBRA" });
-      await emit({ id: `runtime:${rt.id}`, label: `Runtime ${rt.id}`, kind: "runtime", phase: "done", status: "FAILURE", progress: 0, detail: "UNSUPPORTED_RUNTIME" });
       throw new AlbraDepsError(
         "UNSUPPORTED_RUNTIME",
         `UNSUPPORTED_RUNTIME — '${rt.id}' no tiene adaptador de dependencias implementado`,
         `El paquete requiere el runtime '${rt.id}', para el que ALBRA aún no tiene adaptador de dependencias. Instalación abortada.`,
       );
     }
-    await emit({ id: `runtime:${rt.id}`, label: `Runtime ${rt.id}`, kind: "runtime", phase: "start", detail: `verificando disponibilidad (rango ${rt.semver})` });
     const det = await detect(rt.id);
     if (!det.available) {
       if (rt.required !== false) {
-        await emit({ id: `runtime:${rt.id}`, label: `Runtime ${rt.id}`, kind: "runtime", phase: "done", status: "FAILURE", progress: 0, detail: "no disponible en este equipo" });
         throw new AlbraDepsError(
           "RUNTIME_MISSING",
           `RUNTIME_MISSING — runtime requerido '${rt.id}' (${rt.semver}) no está disponible en este equipo`,
@@ -254,7 +231,6 @@ export async function prepareDependencies(opts: PrepareDependenciesOptions): Pro
         );
       }
       await say(`Runtime opcional '${rt.id}' no disponible: se continúa sin él`, { id: rt.id });
-      await emit({ id: `runtime:${rt.id}`, label: `Runtime ${rt.id} (opcional)`, kind: "runtime", phase: "done", status: "SKIPPED", progress: 0, detail: "no disponible; opcional" });
       continue;
     }
     if (det.version && !satisfiesRange(det.version, rt.semver)) {
@@ -266,10 +242,7 @@ export async function prepareDependencies(opts: PrepareDependenciesOptions): Pro
         );
       }
       await say(`Runtime opcional '${rt.id}' v${det.version} fuera de rango ${rt.semver}: se continúa`, { id: rt.id });
-      await emit({ id: `runtime:${rt.id}`, label: `Runtime ${rt.id} (opcional)`, kind: "runtime", phase: "done", status: "WARNING", progress: 100, detail: `v${det.version} fuera de rango ${rt.semver}` });
-      continue;
     }
-    await emit({ id: `runtime:${rt.id}`, label: `Runtime ${rt.id}`, kind: "runtime", phase: "done", status: "SUCCESS", progress: 100, detail: `v${det.version ?? "?"} disponible` });
   }
 
   // 2) Dependencias JS (package.json) — instalación AISLADA en appDir
@@ -279,20 +252,16 @@ export async function prepareDependencies(opts: PrepareDependenciesOptions): Pro
     const node = detectionCache.get("node") ?? await detect("node");
     if (bun.available) {
       await say(`Instalando dependencias JS aisladas en ${opts.appDir} con bun (producción)…`);
-      await emit({ id: "jsdeps", label: "Dependencias JS (bun install)", kind: "dependency", phase: "start", detail: "instalación aislada en el proyecto" });
       try {
         const { stdout, stderr } = await execFileP("bun", ["install", "--production"], { cwd: opts.appDir, timeout: 120_000 });
         const tail = tailLines(`${stdout}\n${stderr}`);
         installs.push({ tool: "bun install --production", ok: true, detail: tail[tail.length - 1] ?? "ok", tail });
         await say(`Dependencias JS instaladas con bun en ${path.basename(opts.appDir)}`, { tool: "bun", tail: tail.slice(-3) });
-        await emit({ id: "jsdeps", label: "Dependencias JS (bun install)", kind: "dependency", phase: "progress", progress: 85, detail: tail[tail.length - 1] ?? "resolviendo paquetes…" });
-        await emit({ id: "jsdeps", label: "Dependencias JS (bun install)", kind: "dependency", phase: "done", status: "SUCCESS", progress: 100, detail: tail[tail.length - 1] ?? "ok" });
       } catch (e) {
         const err = e as Error & { stdout?: string; stderr?: string; killed?: boolean };
         const tail = tailLines(`${err.stdout ?? ""}\n${err.stderr ?? ""}`);
         installs.push({ tool: "bun install --production", ok: false, detail: err.message, tail });
         await say(`bun install falló: ${err.message}`, { tail: tail.slice(-3) });
-        await emit({ id: "jsdeps", label: "Dependencias JS (bun install)", kind: "dependency", phase: "done", status: "FAILURE", progress: 100, detail: err.message });
         throw new AlbraDepsError(
           "DEPENDENCIES_INSTALL_FAILED",
           `DEPENDENCIES_INSTALL_FAILED — bun install falló: ${err.message}`,
@@ -301,20 +270,16 @@ export async function prepareDependencies(opts: PrepareDependenciesOptions): Pro
       }
     } else if (node.available) {
       await say(`bun no disponible → instalando dependencias JS aisladas con npm (omit=dev)…`);
-      await emit({ id: "jsdeps", label: "Dependencias JS (npm install)", kind: "dependency", phase: "start", detail: "instalación aislada en el proyecto" });
       try {
         const { stdout, stderr } = await execFileP("npm", ["install", "--omit=dev", "--prefix", opts.appDir, "--no-audit", "--no-fund", "--loglevel=error"], { cwd: opts.appDir, timeout: 120_000 });
         const tail = tailLines(`${stdout}\n${stderr}`);
         installs.push({ tool: "npm install --omit=dev", ok: true, detail: tail[tail.length - 1] ?? "ok", tail });
         await say(`Dependencias JS instaladas con npm en ${path.basename(opts.appDir)}`, { tool: "npm", tail: tail.slice(-3) });
-        await emit({ id: "jsdeps", label: "Dependencias JS (npm install)", kind: "dependency", phase: "progress", progress: 85, detail: tail[tail.length - 1] ?? "resolviendo paquetes…" });
-        await emit({ id: "jsdeps", label: "Dependencias JS (npm install)", kind: "dependency", phase: "done", status: "SUCCESS", progress: 100, detail: tail[tail.length - 1] ?? "ok" });
       } catch (e) {
         const err = e as Error & { stdout?: string; stderr?: string };
         const tail = tailLines(`${err.stdout ?? ""}\n${err.stderr ?? ""}`);
         installs.push({ tool: "npm install --omit=dev", ok: false, detail: err.message, tail });
         await say(`npm install falló: ${err.message}`, { tail: tail.slice(-3) });
-        await emit({ id: "jsdeps", label: "Dependencias JS (npm install)", kind: "dependency", phase: "done", status: "FAILURE", progress: 100, detail: err.message });
         throw new AlbraDepsError(
           "DEPENDENCIES_INSTALL_FAILED",
           `DEPENDENCIES_INSTALL_FAILED — npm install falló: ${err.message}`,
@@ -324,7 +289,6 @@ export async function prepareDependencies(opts: PrepareDependenciesOptions): Pro
     } else {
       installs.push({ tool: "npm/bun", ok: false, detail: "package.json presente pero no hay runtime node/bun disponible para instalar dependencias", tail: [] });
       await say("package.json presente pero sin node/bun disponible: dependencias NO instaladas", { level: "warn" });
-      await emit({ id: "jsdeps", label: "Dependencias JS", kind: "dependency", phase: "done", status: "FAILURE", progress: 0, detail: "sin node/bun disponible" });
     }
   }
 
@@ -334,30 +298,25 @@ export async function prepareDependencies(opts: PrepareDependenciesOptions): Pro
     const py = detectionCache.get("python") ?? await detect("python");
     if (py.available) {
       const venvDir = path.join(opts.appDir, ".albra-venv");
-      await emit({ id: "pydeps", label: "Dependencias Python (venv + pip)", kind: "dependency", phase: "start", detail: "BEST_EFFORT" });
       try {
         await say(`Creando venv de Python (.albra-venv) para ${path.basename(opts.appDir)}… [BEST_EFFORT]`);
         await execFileP("python3", ["-m", "venv", venvDir], { cwd: opts.appDir, timeout: 60_000 });
-        await emit({ id: "pydeps", label: "Dependencias Python (venv + pip)", kind: "dependency", phase: "progress", progress: 40, detail: "venv creado; instalando requirements…" });
         const venvPython = path.join(venvDir, process.platform === "win32" ? "Scripts\\python.exe" : "bin/python");
         const { stdout, stderr } = await execFileP(venvPython, ["-m", "pip", "install", "-r", "requirements.txt"], { cwd: opts.appDir, timeout: 180_000 });
         const tail = tailLines(`${stdout}\n${stderr}`);
         installs.push({ tool: "python venv + pip install -r requirements.txt", ok: true, detail: tail[tail.length - 1] ?? "ok", tail });
         bestEffort.push("python: dependencias instaladas en .albra-venv (BEST_EFFORT_UNTESTED)");
         await say("Dependencias de Python instaladas en .albra-venv (BEST_EFFORT)", { tail: tail.slice(-3) });
-        await emit({ id: "pydeps", label: "Dependencias Python (venv + pip)", kind: "dependency", phase: "done", status: "SUCCESS", progress: 100, detail: "instaladas en .albra-venv" });
       } catch (e) {
         const err = e as Error & { stdout?: string; stderr?: string };
         const tail = tailLines(`${err.stdout ?? ""}\n${err.stderr ?? ""}`);
         installs.push({ tool: "python venv + pip install -r requirements.txt", ok: false, detail: err.message, tail });
         bestEffort.push("python: preparación de dependencias falló (BEST_EFFORT — no aborta)");
         await say(`Preparación de dependencias Python falló (BEST_EFFORT, no aborta): ${err.message}`, { tail: tail.slice(-3) });
-        await emit({ id: "pydeps", label: "Dependencias Python (venv + pip)", kind: "dependency", phase: "done", status: "WARNING", progress: 100, detail: "falló (BEST_EFFORT, no aborta)" });
       }
     } else {
       bestEffort.push("python: requirements.txt presente pero python3 no disponible (BEST_EFFORT — omitido)");
       await say("requirements.txt presente pero python3 no disponible: BEST_EFFORT omitido");
-      await emit({ id: "pydeps", label: "Dependencias Python (venv + pip)", kind: "dependency", phase: "done", status: "SKIPPED", progress: 0, detail: "python3 no disponible; BEST_EFFORT omitido" });
     }
   }
 

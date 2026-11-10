@@ -1,13 +1,10 @@
 /**
  * ALBRA API — POST /api/install
- * Body: { packageId, accessKey }            → { runId }   (bóveda local)
- * Body: { source: { repo, refType, ref, assetName? }, accessKey } → importPackageFromGithub
+ * Body: { packageId }                      → { runId }   (bóveda local)
+ * Body: { source: { repo, refType, ref, assetName? } } → importPackageFromGithub
  *        primero y luego instala el packageId resultante      (V2 WAVE C).
- * V3 PUERTA DE ACCESO: la CLAVE ÚNICA DE ACCESO es OBLIGATORIA. En flujo
- * GitHub se valida vía API externa ANTES de descargar el asset; en flujo
- * bóveda la valida el paso ACCESS del instalador (antes del DOWNLOAD).
  * - 403 ENTITLEMENT_REQUIRED si el producto está bloqueado (no adquirido).
- * - 403/400 ACCESS_KEY_* si la clave falta o es rechazada (fail-closed).
+ * - 400 si el producto no es instalable / fuente inválida (BRANCH_REF_REJECTED).
  * La instalación corre en background (Run observable vía /api/runs/[id]).
  */
 import { NextResponse } from "next/server";
@@ -15,7 +12,6 @@ import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { runInstall } from "@/lib/albra/core/installer";
 import { CATALOG } from "@/lib/albra/products/catalog";
 import { importPackageFromGithub } from "@/lib/albra/sources/github";
-import { validateProjectAccessKey } from "@/lib/albra/core/access-key";
 import { GithubSourceSchema } from "@/lib/albra/contracts/source";
 import { ApiError, errorResponse, readJson } from "@/lib/albra/api-serialize";
 
@@ -25,21 +21,10 @@ export async function POST(req: Request) {
   try {
     await ensureBootstrap();
 
-    const body = await readJson<{ packageId?: unknown; source?: unknown; accessKey?: unknown }>(req);
-    const accessKey = typeof body?.accessKey === "string" ? body.accessKey : "";
+    const body = await readJson<{ packageId?: unknown; source?: unknown }>(req);
 
     // ── Instalación desde fuente GitHub (V2 WAVE C): importar → instalar ──
     if (body?.source !== undefined) {
-      // V3 PUERTA DE ACCESO: ANTES de descargar CUALQUIER paquete desde la
-      // fuente externa, se valida la clave única vía la API externa.
-      if (!accessKey.trim()) {
-        throw new ApiError(
-          403,
-          "ACCESS_KEY_REQUIRED",
-          "ACCESS_KEY_REQUIRED",
-          "Se requiere la clave única de acceso del proyecto antes de descargar paquetes.",
-        );
-      }
       const parsed = GithubSourceSchema.safeParse(body.source);
       if (!parsed.success) {
         const first = parsed.error.issues[0];
@@ -51,17 +36,10 @@ export async function POST(req: Request) {
           first?.message ?? "Fuente inválida.",
         );
       }
-      // Descarga bloqueada si la API externa no valida la clave (fail-closed).
-      const access = await validateProjectAccessKey({ packageId: parsed.data.repo.split("/").pop() ?? "github-source", accessKey });
-      if (!access.ok) {
-        throw new ApiError(403, access.code, `${access.code} (endpoint ${access.endpoint})`, access.userMessage);
-      }
       const imported = await importPackageFromGithub(parsed.data);
       // La instalación usa la bóveda ya verificada; el origen queda registrado
       // en InstalledProduct (originType/Repo/Ref/Commit) vía runInstall opts.
-      // La clave vuelve a validarse en el paso ACCESS del instalador.
       const { runId } = await runInstall(imported.packageId, {
-        accessKey,
         origin: {
           repo: imported.origin.repo,
           refType: imported.origin.refType,
@@ -115,7 +93,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { runId } = await runInstall(packageId, { accessKey });
+    const { runId } = await runInstall(packageId);
     return NextResponse.json({ runId });
   } catch (e) {
     return errorResponse(e);

@@ -210,6 +210,10 @@ export const ProductContractSchema = z.object({
 });
 export type ProductContract = z.infer<typeof ProductContractSchema>;
 
+// Docker Compose descriptor is additive groundwork; it is not yet wired into ProductContract.
+export { DockerComposeDeploymentSchema, parseDockerComposeDeployment } from "./docker-compose";
+export type { DockerComposeDeployment } from "./docker-compose";
+
 // ───────────────── Compatibility Engine ─────────────────
 
 export type CompatibilityResult =
