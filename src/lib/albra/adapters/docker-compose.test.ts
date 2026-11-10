@@ -97,3 +97,17 @@ describe("parseDockerComposePs", () => {
     expect(parseDockerComposePs(JSON.stringify({ Name: "missing-service" })).ok).toBe(false);
   });
 });
+
+// ───────────────────────── F1: plan de instalación de Docker ─────────────────────────
+import { planDockerInstall } from "./docker-compose";
+
+describe("planDockerInstall", () => {
+  test("Linux → método oficial get.docker.com con root requerido", async () => {
+    if (process.platform !== "linux") return;
+    const plan = await planDockerInstall();
+    expect(plan.os).toBe("linux");
+    expect(plan.method).toBe("get.docker.com");
+    expect(plan.needsRoot).toBe(true);
+    expect(plan.command?.join(" ")).toContain("get.docker.com");
+  });
+});

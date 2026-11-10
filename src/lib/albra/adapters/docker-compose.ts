@@ -272,3 +272,94 @@ export async function runDockerCompose(opts: {
     : runDocker;
   return exec([...base, ...actionArgs[opts.action]], paths.root);
 }
+
+// ───────────────────────── Instalación automatizada de Docker (F1) ─────────────────────────
+
+export type DockerInstallPlan =
+  | { os: "linux"; distro: string; method: "get.docker.com"; needsRoot: boolean; command: string[]; note: string }
+  | { os: "windows"; method: "docker-desktop"; needsRoot: false; command: null; note: string }
+  | { os: "unsupported"; method: "manual"; needsRoot: false; command: null; note: string };
+
+/**
+ * Plan de instalación de Docker según el sistema (métodos OFICIALES):
+ *  - Linux: script oficial https://get.docker.com (requiere root/sudo).
+ *  - Windows: Docker Desktop con WSL2 (instalación interactiva del operador).
+ *  - Otros: manual.
+ * NUNCA ejecuta nada destructivo ni ignora privilegios: si falta permiso,
+ * devuelve el plan y el instalador pide elevación explicando el motivo.
+ */
+export async function planDockerInstall(): Promise<DockerInstallPlan> {
+  if (process.platform === "linux") {
+    let distro = "linux";
+    try {
+      const { readFile } = await import("node:fs/promises");
+      const osRelease = await readFile("/etc/os-release", "utf-8");
+      const id = /^ID=(.+)$/m.exec(osRelease)?.[1]?.replace(/"/g, "") ?? "linux";
+      distro = id;
+    } catch { /* sin /etc/os-release → genérico */ }
+    return {
+      os: "linux",
+      distro,
+      method: "get.docker.com",
+      needsRoot: true,
+      command: ["sh", "-c", "curl -fsSL https://get.docker.com | sh"],
+      note: `Instalación oficial de Docker para ${distro} (get.docker.com). Requiere privilegios de root: el instalador pedirá elevación (sudo) y explicará el motivo antes de ejecutarla.`,
+    };
+  }
+  if (process.platform === "win32") {
+    return {
+      os: "windows",
+      method: "docker-desktop",
+      needsRoot: false,
+      command: null,
+      note: "En Windows, instala Docker Desktop (con backend WSL2) desde https://www.docker.com/products/docker-desktop/ y asegúrate de que 'docker compose version' responda. ALBRA no puede instalarlo silenciosamente.",
+    };
+  }
+  return {
+    os: "unsupported",
+    method: "manual",
+    needsRoot: false,
+    command: null,
+    note: "Plataforma sin instalación automatizada de Docker. Instala Docker Engine + Compose v2 manualmente.",
+  };
+}
+
+/**
+ * Intenta instalar Docker cuando falta. SOLO Linux (script oficial).
+ * Devuelve un resultado honesto: instalado=true SOLO si `docker version`
+ * responde tras la instalación. En Windows/macOS devuelve el plan (sin ejecutar).
+ */
+export async function ensureDockerEngine(opts?: { execute?: boolean }): Promise<
+  { installed: true; dockerVersion: string } | { installed: false; plan: DockerInstallPlan; reason: string }
+> {
+  const pf = await dockerComposePreflight();
+  if (pf.ok) return { installed: true, dockerVersion: pf.dockerVersion ?? "ok" };
+  const plan = await planDockerInstall();
+  if (plan.os !== "linux" || !opts?.execute || !plan.command) {
+    return { installed: false, plan, reason: plan.note };
+  }
+  // Linux: el script oficial necesita root. Sin sudo/root disponible → fail-closed honesto.
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  if (!isRoot) {
+    const hasSudo = await new Promise<boolean>((resolve) => {
+      const child = execFile("sudo", ["-n", "true"], { timeout: 5_000 }, (err) => resolve(!err));
+      child.on("error", () => resolve(false));
+    });
+    if (!hasSudo) {
+      return { installed: false, plan, reason: "Se requieren privilegios de administrador para instalar Docker (sudo sin contraseña no disponible). Ejecuta el plan indicado y reintenta." };
+    }
+    plan.command = ["sudo", ...plan.command];
+  }
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileP = promisify(execFile);
+  try {
+    await execFileP(plan.command[0], plan.command.slice(1), { timeout: 600_000, maxBuffer: 4 * 1024 * 1024 });
+  } catch (e) {
+    return { installed: false, plan, reason: `La instalación de Docker falló: ${(e as Error).message.slice(0, 300)}` };
+  }
+  const verify = await dockerComposePreflight();
+  return verify.ok
+    ? { installed: true, dockerVersion: verify.dockerVersion ?? "ok" }
+    : { installed: false, plan, reason: "El script terminó pero Docker Engine no responde todavía (inicia el servicio docker y reintenta)." };
+}
