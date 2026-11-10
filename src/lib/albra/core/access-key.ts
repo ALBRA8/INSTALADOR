@@ -114,7 +114,9 @@ export async function getOrCreateServiceKey(): Promise<string> {
   const row = await db.platformState.findUnique({ where: { key: "access:serviceKey" } });
   const existing = (row?.value as { key?: string } | null)?.key;
   if (existing && ACCESS_KEY_PATTERN.test(existing)) return existing;
-  const key = "ALBRA-SVC-" + generateKeyAlphabet().slice(6);
+  // FIX E2E: la clave de servicio DEBE cumplir el formato de la puerta
+  // (ALBRA-XXXX-XXXX-XXXX). La distingue su plan=SERVICE, no su formato.
+  const key = generateKeyAlphabet();
   upsertIssuedKey({
     key,
     packageId: "*",
