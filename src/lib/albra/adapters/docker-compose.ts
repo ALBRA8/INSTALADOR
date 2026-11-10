@@ -136,6 +136,19 @@ async function runDocker(args: string[], cwd: string): Promise<DockerCommandResu
   }
 }
 
+
+/** Ensure the one ALBRA-managed shared bridge exists; never mutate other networks. */
+export async function ensureAlbraAgentNetwork(): Promise<DockerCommandResult> {
+  const name = "albra-agents";
+  const inspected = await runDocker(["network", "inspect", name], process.cwd());
+  if (inspected.ok) return inspected;
+  const created = await runDocker(["network", "create", "--driver", "bridge", name], process.cwd());
+  if (created.ok) return created;
+  // A concurrent installer may have created it between inspect and create.
+  const raced = await runDocker(["network", "inspect", name], process.cwd());
+  return raced.ok ? raced : created;
+}
+
 /** Read-only checks; safe to run during product preflight. */
 export async function dockerComposePreflight(): Promise<DockerPreflightResult> {
   const issues: DockerPreflightResult["issues"] = [];
