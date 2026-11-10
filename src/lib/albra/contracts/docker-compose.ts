@@ -29,6 +29,8 @@ export const DockerComposeDeploymentSchema = z.object({
   projectName: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/),
   /** Restrict managed agents to the platform-owned private network. */
   networkName: z.literal("albra-agents"),
+  /** Secret names for which the installer may generate random values. */
+  generatedSecretKeys: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/)).min(1),
   imageDigests: z.array(z.object({
     service: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/),
     image: ImageDigest,
@@ -36,6 +38,9 @@ export const DockerComposeDeploymentSchema = z.object({
   healthTimeoutSeconds: z.number().int().min(10).max(900).default(180),
   preserveVolumesOnStop: z.literal(true).default(true),
 }).strict().superRefine((value, ctx) => {
+  if (new Set(value.generatedSecretKeys).size !== value.generatedSecretKeys.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["generatedSecretKeys"], message: "Duplicate generated secret keys are not allowed." });
+  }
   const seen = new Set<string>();
   for (const item of value.imageDigests) {
     if (seen.has(item.service)) {
