@@ -343,6 +343,318 @@ export const LEADS_SEEDS = {
   ],
 };
 
+
+// ─────────── Contratos CONTENEDORIZADOS (ORDEN MAESTRA F5) ───────────
+
+function panelContract(version: string): ProductContract {
+  return {
+    contractVersion: "1.0.0",
+    identity: {
+      productId: "panel-de-control",
+      name: "Panel de Control",
+      displayName: "ALBRA Panel de Control",
+      vendor: "ALBRA",
+      description: "Centro de administración del ecosistema: descubre, instala, supervisa y opera los agentes ALBRA vía contrato EEC.",
+      category: "plataforma",
+      icon: "LayoutDashboard",
+      version,
+      releaseChannel: "stable",
+    },
+    requirements: {
+      platforms: ["linux", "windows", "macos"],
+      architectures: ["x64", "arm64"],
+      minPlatformVersion: "1.0.0",
+      minDiskMB: 200,
+      preferredPorts: [3900],
+    },
+    dependencies: [],
+    configuration: { fields: [
+      { key: "port", label: "Puerto del servicio", scope: "SYSTEM" as const, type: "number" as const, required: true, systemManaged: true },
+      { key: "dataPath", label: "Ruta de datos", scope: "SYSTEM" as const, type: "string" as const, required: true, systemManaged: true },
+    ] },
+    health: { checks: [
+      { checkId: "container-health", label: "Healthcheck del contenedor (/api/health)", target: "http-health" as const, critical: true },
+      { checkId: "compose-services", label: "Servicios Compose", target: "runtime" as const, critical: true },
+    ], intervalSeconds: 30 },
+    lifecycle: { supportedOperations: [...ALL_OPS], autoStartOnInstall: true, restartable: true },
+    update: { migrations: [], supportsRollback: true, backupBeforeUpdate: true },
+    security: {
+      signedPackagesRequired: true,
+      secretKeys: ["eec.ops.token"],
+      permissions: ["data:read", "data:write", "ops:delegate"],
+      dataClassification: "internal" as const,
+    },
+    providers: { providers: [] },
+    deployment: { kinds: ["docker-compose"], preferredAdapter: "docker-compose" as const },
+  };
+}
+
+function chismosoContract(version: string): ProductContract {
+  return {
+    contractVersion: "1.0.0",
+    identity: {
+      productId: "chismoso",
+      name: "Agente Chismoso",
+      displayName: "ALBRA Agente Chismoso",
+      vendor: "ALBRA",
+      description: "Agente de inteligencia de señales: investigación de mercado, monitoreo y reportes (dashboard + scheduler + backups + Redis).",
+      category: "marketing",
+      icon: "Radar",
+      version,
+      releaseChannel: "stable",
+    },
+    requirements: {
+      platforms: ["linux", "windows", "macos"],
+      architectures: ["x64", "arm64"],
+      minPlatformVersion: "1.0.0",
+      minDiskMB: 300,
+      preferredPorts: [],
+    },
+    dependencies: [],
+    configuration: { fields: [
+      { key: "dbPath", label: "Ruta de la base SQLite (en volumen)", scope: "SYSTEM" as const, type: "string" as const, required: true, defaultValue: "/data/chismoso.db", systemManaged: true },
+      { key: "outputDir", label: "Directorio de reportes (en volumen)", scope: "SYSTEM" as const, type: "string" as const, required: true, defaultValue: "/data/reports", systemManaged: true },
+      { key: "authTokens", label: "Tokens de máquina (hashes SHA-256, coma)", scope: "USER" as const, type: "string" as const, required: false, systemManaged: false, description: "Generados por el operador con chismoso auth issue. Nunca se generan aleatoriamente." },
+    ] },
+    health: { checks: [
+      { checkId: "container-health", label: "Healthcheck del contenedor (/api/livez → /api/health)", target: "http-health" as const, critical: true },
+      { checkId: "redis", label: "Redis (redis-cli ping)", target: "runtime" as const, critical: true },
+      { checkId: "scheduler", label: "Scheduler en ejecución", target: "runtime" as const, critical: false },
+    ], intervalSeconds: 30 },
+    lifecycle: { supportedOperations: [...ALL_OPS], autoStartOnInstall: true, restartable: true },
+    update: { migrations: [], supportsRollback: true, backupBeforeUpdate: true },
+    security: {
+      signedPackagesRequired: true,
+      secretKeys: ["chismoso_jwt_secret"],
+      permissions: ["data:read", "data:write", "net:outbound"],
+      dataClassification: "confidential" as const,
+    },
+    providers: { providers: [] },
+    deployment: { kinds: ["docker-compose"], preferredAdapter: "docker-compose" as const },
+  };
+}
+
+
+// ─────────── Compose ALBRA de los despliegues contenedorizados (F5) ───────────
+
+/** PANEL DE CONTROL: es el punto de ENTRADA del operador → publica ${ALBRA_PANEL_PORT}. */
+const PANEL_COMPOSE_ALBRA = `# ALBRA — Panel de Control (despliegue gestionado por el INSTALADOR)
+# El PANEL es la puerta de entrada del operador: publica su puerto.
+services:
+  panel:
+    image: \${PANEL_IMAGE:?PANEL_IMAGE debe fijarse por digest sha256}
+    restart: unless-stopped
+    env_file:
+      - .env.albra
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "\${ALBRA_PANEL_PORT:-3900}:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - panel_data:/app/db
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    networks:
+      - albra_gateway
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+volumes:
+  panel_data:
+networks:
+  albra_gateway:
+    external: true
+    name: albra-agents
+`;
+
+/** CHISMOSO: sin puertos al host; acceso solo por la red interna albra-agents. */
+const CHISMOSO_COMPOSE_ALBRA = `# ALBRA-managed CHISMOSO profile.
+# El INSTALADOR crea .env.albra (0600) y fija los digests antes del up.
+services:
+  app:
+    image: \${CHISMOSO_IMAGE:?CHISMOSO_IMAGE debe fijarse por digest sha256}
+    restart: unless-stopped
+    env_file:
+      - .env.albra
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+      REDIS_URL: redis://redis:6379
+      CHISMOSO_DB_PATH: /data/chismoso.db
+      CHISMOSO_OUTPUT_DIR: /data/reports
+    expose:
+      - "3000"
+    volumes:
+      - chismoso_data:/data
+      - chismoso_reports:/data/reports
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - private
+      - albra_gateway
+    healthcheck:
+      test: ["/opt/scripts/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    logging: &default-logging
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 1G }
+
+  scheduler:
+    image: \${CHISMOSO_IMAGE:?CHISMOSO_IMAGE debe fijarse por digest sha256}
+    restart: unless-stopped
+    command: ["node", "chismoso/dist/scheduler/run.js"]
+    env_file:
+      - .env.albra
+    environment:
+      NODE_ENV: production
+      CHISMOSO_DB_PATH: /data/chismoso.db
+      CHISMOSO_OUTPUT_DIR: /data/reports
+    volumes:
+      - chismoso_data:/data
+      - chismoso_reports:/data/reports
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - private
+      - albra_gateway
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  backup:
+    image: \${CHISMOSO_IMAGE:?CHISMOSO_IMAGE debe fijarse por digest sha256}
+    restart: unless-stopped
+    entrypoint: ["/sbin/tini", "--"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "[backup] starting backup loop";
+        while true; do
+          sleep 6h;
+          /opt/scripts/backup-sqlite.sh || echo "[backup] backup failed at \$\$(date -u +%FT%TZ)";
+        done
+    env_file:
+      - .env.albra
+    environment:
+      CHISMOSO_DB_PATH: /data/chismoso.db
+      BACKUP_DIR: /data/backups
+    volumes:
+      - chismoso_data:/data:ro
+      - chismoso_backups:/data/backups
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - private
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  redis:
+    image: \${CHISMOSO_REDIS_IMAGE:?CHISMOSO_REDIS_IMAGE debe fijarse por digest sha256}
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - private
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+volumes:
+  chismoso_data:
+  chismoso_reports:
+  chismoso_backups:
+  redis_data:
+
+networks:
+  private:
+    driver: bridge
+    internal: true
+  albra_gateway:
+    external: true
+    name: albra-agents
+`;
+
+/** Declaración de despliegue embebida en manifest.metadata (contrato de fuente). */
+const CHISMOSO_DEPLOYMENT_SOURCE = {
+  kind: "docker-compose",
+  composeFile: "compose.albra.yaml",
+  envFile: ".env.albra",
+  projectName: "chismoso",
+  networkName: "albra-agents",
+  generatedSecretKeys: ["CHISMOSO_JWT_SECRET"],
+  images: [
+    { service: "app", imageVar: "CHISMOSO_IMAGE", ref: "ghcr.io/albra8/chismoso:1.5.0" },
+    { service: "scheduler", imageVar: "CHISMOSO_IMAGE", ref: "ghcr.io/albra8/chismoso:1.5.0" },
+    { service: "backup", imageVar: "CHISMOSO_IMAGE", ref: "ghcr.io/albra8/chismoso:1.5.0" },
+    { service: "redis", imageVar: "CHISMOSO_REDIS_IMAGE", ref: "redis:7.4" },
+  ],
+  healthTimeoutSeconds: 180,
+} as const;
+
+const PANEL_DEPLOYMENT_SOURCE = {
+  kind: "docker-compose",
+  composeFile: "compose.albra.yaml",
+  envFile: ".env.albra",
+  projectName: "albra-panel",
+  networkName: "albra-agents",
+  generatedSecretKeys: ["EEC_SESSION_SECRET"],
+  envStatic: {
+    ALBRA_OPS_URL: "http://host.docker.internal:3000",
+  },
+  envFromPlatformSecret: [
+    { envVar: "ALBRA_OPS_TOKEN", secretKey: "eec.ops.token" },
+  ],
+  images: [
+    { service: "panel", imageVar: "PANEL_IMAGE", ref: "ghcr.io/albra8/panel-de-control:1.0.0" },
+  ],
+  healthTimeoutSeconds: 120,
+} as const;
+
+const CHISMOSO_DEPLOYMENT_JSON = JSON.stringify(
+  { albra: "container-deployment-source/1", productId: "chismoso", deployment: CHISMOSO_DEPLOYMENT_SOURCE },
+  null, 2,
+);
+
 // ─────────────────── Package builds (bóveda) ───────────────────
 
 export interface PackageBuild {
@@ -412,6 +724,38 @@ export const PACKAGE_BUILDS: PackageBuild[] = [
         { path: "README.md", content: "# ALBRA Agente Leads\nCaptura y calificación de prospectos.\n" },
       ],
       seeds: LEADS_SEEDS,
+      migrations: [],
+    },
+  },
+];
+
+
+  {
+    packageId: "panel-de-control",
+    version: "1.0.0",
+    displayName: "ALBRA Panel de Control",
+    contract: panelContract("1.0.0"),
+    payload: {
+      application: [
+        { path: "compose.albra.yaml", content: PANEL_COMPOSE_ALBRA },
+        { path: "README.md", content: "# ALBRA Panel de Control\nDesplegado y administrado por el INSTALADOR (red albra-agents).\n" },
+      ],
+      seeds: {},
+      migrations: [],
+    },
+  },
+  {
+    packageId: "chismoso",
+    version: "1.5.0",
+    displayName: "ALBRA Agente Chismoso",
+    contract: chismosoContract("1.5.0"),
+    payload: {
+      application: [
+        { path: "compose.albra.yaml", content: CHISMOSO_COMPOSE_ALBRA },
+        { path: "albra/deployment.json", content: CHISMOSO_DEPLOYMENT_JSON },
+        { path: "README.md", content: "# ALBRA Agente Chismoso\nPrimer agente gestionado: red interna, sin puertos al host, secretos del INSTALADOR.\n" },
+      ],
+      seeds: {},
       migrations: [],
     },
   },

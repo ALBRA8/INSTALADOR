@@ -154,6 +154,14 @@ export const ContainerDeploymentSourceSchema = z.object({
   })).min(1),
   /** Timeout de espera de salud (segundos). */
   healthTimeoutSeconds: z.number().int().min(10).max(900).default(180),
+  /** Env NO secreto que el instalador escribe en el .env generado. */
+  envStatic: z.record(z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/), z.string().max(500)).optional(),
+  /** Secretos de la PLATAFORMA (SecretStore) inyectados en el .env del contenedor. */
+  envFromPlatformSecret: z.array(z.object({
+    envVar: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/),
+    /** Clave exacta en el SecretStore (p. ej. "eec.ops.token"). */
+    secretKey: z.string().regex(/^[a-z][a-z0-9._-]{0,127}$/),
+  })).optional(),
 }).strict().superRefine((v, ctx) => {
   const seenSvc = new Set<string>(), seenVar = new Set<string>();
   for (const img of v.images) {

@@ -266,10 +266,18 @@ export async function installContainerDeployment(input: InstallContainerInput): 
   fs.writeFileSync(composePath, input.composeYaml, "utf-8");
 
   await input.onProgress?.("Generando secretos criptográficos (.env 0600)");
+  // Env NO secreto + secretos de la PLATAFORMA (p. ej. token ops para el PANEL).
+  const plainValues: Record<string, string> = { ...(input.deployment.envStatic ?? {}) };
+  for (const mapping of input.deployment.envFromPlatformSecret ?? []) {
+    const { getSecret } = await import("@/lib/albra/core/secrets");
+    const value = await getSecret(mapping.secretKey, "platform");
+    if (value) plainValues[mapping.envVar] = value;
+  }
   const envRes = await createGeneratedDockerEnvFile({
     productDir: dir,
     envFile: envRel,
     secretKeys: input.deployment.generatedSecretKeys,
+    plainValues,
   });
   if (!envRes.ok && envRes.code !== "ENV_FILE_EXISTS") {
     throw new ContainerDeployError("ENV_GENERATION_FAILED", envRes.message, "No se pudieron generar los secretos del despliegue.");

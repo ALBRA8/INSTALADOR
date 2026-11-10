@@ -167,8 +167,8 @@ export type ProvidersContract = z.infer<typeof ProvidersContractSchema>;
 
 // ───────────────── Deployment Contract ─────────────────
 
-export const DeploymentKind = z.enum(["local", "selfhosted", "saas"]);
-export const DeploymentAdapterId = z.enum(["windows-local", "linux-local", "local-dev", "selfhosted-vps"]);
+export const DeploymentKind = z.enum(["local", "selfhosted", "saas", "docker-compose"]);
+export const DeploymentAdapterId = z.enum(["windows-local", "linux-local", "local-dev", "selfhosted-vps", "docker-compose"]);
 
 export const DeploymentContractSchema = z.object({
   kinds: z.array(DeploymentKind).min(1),
