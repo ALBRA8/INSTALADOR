@@ -21,6 +21,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { StatusBadge } from "@/components/albra/status-badge";
 import type { CatalogItem } from "@/lib/albra/api-types";
 import { cn } from "@/lib/utils";
@@ -71,6 +72,23 @@ export function ProductCard({
         </div>
         <StatusBadge state={item.state} health={item.health} />
       </div>
+
+      {/* V3: barra de progreso POR PROYECTO mientras hay una operación activa */}
+      {inProgress && item.progress != null && (
+        <div className="space-y-1" aria-live="polite">
+          <div className="flex items-baseline justify-between">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-emerald-400">
+              {item.progressLabel ?? "Trabajando"}
+            </span>
+            <span className="font-mono text-[11px] tabular-nums text-emerald-400">{item.progress}%</span>
+          </div>
+          <Progress
+            value={item.progress}
+            aria-label={`Progreso de ${item.displayName}`}
+            className="h-1.5 bg-zinc-800 [&>[data-slot=progress-indicator]]:bg-emerald-500"
+          />
+        </div>
+      )}
 
       {/* Chips: proceso real / puerto / certificado / actualización / bloqueado */}
       <div className="flex flex-wrap items-center gap-1.5">

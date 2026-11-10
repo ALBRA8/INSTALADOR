@@ -20,6 +20,7 @@ import { runHealthChecks, latestHealth } from "@/lib/albra/core/health";
 import { runInstall } from "@/lib/albra/core/installer";
 import { runUpdate, rollbackLastUpdate } from "@/lib/albra/core/updater";
 import { runUninstall } from "@/lib/albra/core/uninstaller";
+import { getOrCreateServiceKey } from "@/lib/albra/core/access-key";
 import { createBackup, restoreBackup } from "@/lib/albra/core/backup";
 import { collectDiagnostics } from "@/lib/albra/core/diagnostics";
 import { getLatestVersion } from "@/lib/albra/products/catalog";
@@ -203,7 +204,8 @@ export async function executeOps(raw: unknown, actor = "EEC"): Promise<EecOpsRes
     switch (request.operation) {
       case "INSTALL": {
         // Asíncrono: responde runId; el estado final se consulta con STATUS.
-        const { runId } = await runInstall(request.productId);
+        // V3: la puerta de acceso aplica (sin bypass) — clave de servicio validada por la API externa.
+        const { runId } = await runInstall(request.productId, { accessKey: await getOrCreateServiceKey() });
         result = { runId };
         break;
       }
@@ -237,7 +239,7 @@ export async function executeOps(raw: unknown, actor = "EEC"): Promise<EecOpsRes
         if (!targetVersion) {
           return reject("OPERATION_FAILED", `No hay versión destino disponible para ${request.productId}; indica params.targetVersion`);
         }
-        const { runId } = await runUpdate(request.productId, targetVersion);
+        const { runId } = await runUpdate(request.productId, targetVersion, null, 200, { accessKey: await getOrCreateServiceKey() });
         result = { runId, detail: { targetVersion } };
         break;
       }
