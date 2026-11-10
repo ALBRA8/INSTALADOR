@@ -33,8 +33,12 @@ function summarizeServices(services: DockerComposeServiceState[]) {
   if (services.length === 0) {
     return { observedState: "STOPPED" as const, health: "UNKNOWN" as const };
   }
+  const allStopped = services.every(s =>
+    ["exited", "stopped", "created"].includes(s.state) && (s.exitCode === null || s.exitCode === 0),
+  );
+  if (allStopped) return { observedState: "STOPPED" as const, health: "UNKNOWN" as const };
   const failed = services.some(s =>
-    ["exited", "dead", "removing"].includes(s.state) || s.health === "unhealthy" ||
+    ["dead", "removing"].includes(s.state) || s.health === "unhealthy" ||
     (s.exitCode !== null && s.exitCode !== 0 && s.state !== "running"),
   );
   if (failed) return { observedState: "DEGRADED" as const, health: "FAILED" as const };
