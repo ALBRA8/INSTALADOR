@@ -29,7 +29,7 @@ export interface ContainerLifecycleResult {
   error?: string;
 }
 
-function summarizeServices(services: DockerComposeServiceState[]) {
+export function summarizeContainerServices(services: DockerComposeServiceState[]) {
   if (services.length === 0) {
     return { observedState: "STOPPED" as const, health: "UNKNOWN" as const };
   }
@@ -145,7 +145,7 @@ export async function runContainerLifecycle(
       };
     }
 
-    const summary = summarizeServices(parsed.services);
+    const summary = summarizeContainerServices(parsed.services);
     const matchesDesired = desiredState === "RUNNING"
       ? summary.observedState === "RUNNING" && summary.health !== "FAILED"
       : summary.observedState === "STOPPED";
