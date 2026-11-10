@@ -727,9 +727,6 @@ export const PACKAGE_BUILDS: PackageBuild[] = [
       migrations: [],
     },
   },
-];
-
-
   {
     packageId: "panel-de-control",
     version: "1.0.0",
@@ -782,6 +779,8 @@ export interface CatalogEntry {
 export const CATALOG: CatalogEntry[] = [
   { productId: "crm", displayName: "ALBRA CRM", description: "Contactos, pipeline de oportunidades y seguimiento comercial.", icon: "Users", category: "ventas", installable: true, locked: false, latestVersion: "1.1.0" },
   { productId: "leads", displayName: "ALBRA Agente Leads", description: "Captura y calificación de leads con embudo simple.", icon: "Target", category: "marketing", installable: true, locked: false, latestVersion: "1.0.0" },
+  { productId: "panel-de-control", displayName: "ALBRA Panel de Control", description: "Centro de administración del ecosistema: descubre e instala agentes vía contrato EEC (despliegue Docker gestionado).", icon: "LayoutDashboard", category: "plataforma", installable: true, locked: false, latestVersion: "1.0.0" },
+  { productId: "chismoso", displayName: "ALBRA Agente Chismoso", description: "Inteligencia de señales: investigación y reportes. Primer agente gestionado en Docker (red interna albra-agents, sin puertos al host).", icon: "Radar", category: "marketing", installable: true, locked: false, latestVersion: "1.5.0" },
   { productId: "krea", displayName: "ALBRA Agente KREA", description: "Asistente creativo con IA para generación de contenido.", icon: "Sparkles", category: "ia", installable: false, locked: true, requiredEntitlement: "entitlement.krea", latestVersion: "0.9.0" },
   { productId: "trading", displayName: "ALBRA Trading", description: "Automatización y monitoreo de operaciones de trading.", icon: "LineChart", category: "finanzas", installable: false, locked: true, requiredEntitlement: "entitlement.trading", latestVersion: "0.9.0" },
 ];
