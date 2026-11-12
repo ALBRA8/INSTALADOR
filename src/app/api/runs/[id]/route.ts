@@ -10,7 +10,7 @@ import { ApiError, errorResponse, toRunDTO } from "@/lib/albra/api-serialize";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     await ensureBootstrap();
     const header = req.headers.get("authorization") ?? "";
