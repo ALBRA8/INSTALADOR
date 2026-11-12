@@ -81,14 +81,21 @@ export function verifyOpsToken(provided: string, expected: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
-// ───────────────────────── Nonce replay guard ─────────────────────────
+// ───────────────────────── Durable nonce replay guard ─────────────────────────
 
-/** nonce → expiresAt (ms). En memoria por instancia del INSTALADOR. */
-const nonceRegistry = new Map<string, number>();
-
-function sweepNonces(now: number): void {
-  for (const [nonce, expiresAt] of nonceRegistry) {
-    if (expiresAt <= now) nonceRegistry.delete(nonce);
+/** El registro vive en Prisma para sobrevivir reinicios y múltiples instancias. */
+async function registerNonceOnce(nonce: string, expiresAt: Date, now: Date): Promise<boolean> {
+  await db.eecNonce.deleteMany({ where: { expiresAt: { lte: now } } });
+  try {
+    await db.eecNonce.create({ data: { nonce, expiresAt } });
+    return true;
+  } catch (error) {
+    // Prisma P2002 = nonce ya registrado. Cualquier otro error se propaga:
+    // si no podemos persistir la protección, la operación debe fallar cerrada.
+    if (typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "P2002") {
+      return false;
+    }
+    throw error;
   }
 }
 
@@ -184,18 +191,20 @@ export async function executeOps(raw: unknown, actor = "EEC"): Promise<EecOpsRes
   }
   const request = parsed.data;
 
-  // 4) Expiración (ventana ≤ 5 min ya garantizada por el schema)
+  // 4) Ventana temporal: rechazar solicitudes expiradas o emitidas demasiado
+  // adelante respecto del reloj del INSTALADOR (tolerancia de 60 segundos).
   const now = Date.now();
-  if (Date.parse(request.expiresAt) < now) {
-    return reject("REQUEST_EXPIRED", `Solicitud ${request.requestId} expiró en ${request.expiresAt}`);
+  const issuedAt = Date.parse(request.issuedAt);
+  const expiresAt = Date.parse(request.expiresAt);
+  if (issuedAt > now + 60_000 || expiresAt <= now) {
+    return reject("REQUEST_EXPIRED", `Solicitud ${request.requestId} fuera de la ventana temporal permitida`);
   }
 
-  // 5) Nonce anti-replay
-  sweepNonces(now);
-  if (nonceRegistry.has(request.nonce)) {
+  // 5) Anti-replay persistente y atómico (clave única en SQLite/Prisma).
+  const nonceRegistered = await registerNonceOnce(request.nonce, new Date(expiresAt), new Date(now));
+  if (!nonceRegistered) {
     return reject("NONCE_REPLAYED", `Nonce ya utilizado (requestId ${request.requestId})`);
   }
-  nonceRegistry.set(request.nonce, Date.parse(request.expiresAt));
 
   // 6) Despacho a los motores REALES del INSTALADOR
   const ok = (result: EecOpsResult): EecOpsResponse => ({
