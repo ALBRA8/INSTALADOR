@@ -163,12 +163,19 @@ export const ContainerDeploymentSourceSchema = z.object({
     secretKey: z.string().regex(/^[a-z][a-z0-9._-]{0,127}$/),
   })).optional(),
 }).strict().superRefine((v, ctx) => {
-  const seenSvc = new Set<string>(), seenVar = new Set<string>();
+  const seenSvc = new Set<string>();
+  /** imageVar → ref. Varios servicios PUEDEN compartir imageVar (misma imagen
+   *  para app/scheduler/backup) pero su ref debe ser idéntica: la sustitución
+   *  de digest por variable es única y determinista. */
+  const varRef = new Map<string, string>();
   for (const img of v.images) {
     if (seenSvc.has(img.service)) ctx.addIssue({ code: "custom", path: ["images"], message: `Servicio duplicado en images: ${img.service}` });
     seenSvc.add(img.service);
-    if (seenVar.has(img.imageVar)) ctx.addIssue({ code: "custom", path: ["images"], message: `imageVar duplicada: ${img.imageVar}` });
-    seenVar.add(img.imageVar);
+    const prevRef = varRef.get(img.imageVar);
+    if (prevRef !== undefined && prevRef !== img.ref) {
+      ctx.addIssue({ code: "custom", path: ["images"], message: `imageVar '${img.imageVar}' declarada con refs distintas ('${prevRef}' y '${img.ref}'): ambiguo para fijar digest` });
+    }
+    varRef.set(img.imageVar, img.ref);
   }
 });
 export type ContainerDeploymentSource = z.infer<typeof ContainerDeploymentSourceSchema>;

@@ -126,16 +126,19 @@ export async function preflight(packageId: string): Promise<PreflightReport> {
 
   // Puertos — resolver conflictos automáticamente si es seguro
   let assignedPort: number | undefined;
-  const port = await adapter.findFreePort(contract.requirements.preferredPorts);
+  const preferredPorts = contract.requirements.preferredPorts ?? [];
+  const port = await adapter.findFreePort(preferredPorts);
   if (!port) {
     issues.push({ code: "NO_PORT_AVAILABLE", severity: "BLOCKER", message: "No hay puertos libres en el rango configurado" });
   } else {
     assignedPort = port;
-    const preferred = contract.requirements.preferredPorts[0];
+    const preferred = preferredPorts[0];
     issues.push({
       code: "PORT_RESOLVED",
-      severity: port === preferred ? "RESOLVED" : "WARNING",
-      message: port === preferred ? `Puerto preferido ${port} libre` : `Puerto ${preferred} ocupado → ALBRA reasignó automáticamente el puerto ${port}`,
+      severity: !preferred || port === preferred ? "RESOLVED" : "WARNING",
+      message: !preferred
+        ? `Producto sin puertos preferentes declarados (despliegue gestionado) — reserva interna ${port}`
+        : port === preferred ? `Puerto preferido ${port} libre` : `Puerto ${preferred} ocupado → ALBRA reasignó automáticamente el puerto ${port}`,
     });
   }
 

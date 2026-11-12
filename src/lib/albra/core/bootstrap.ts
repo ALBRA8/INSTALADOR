@@ -36,14 +36,23 @@ async function doBootstrap(): Promise<void> {
           channel: "stable",
           displayName: build.displayName,
           createdAt: new Date().toISOString(),
-          metadata: { vendor: "ALBRA", category: build.contract.identity.category },
+          // ORDEN MAESTRA F2/F5: los productos contenedores incrustan su
+          // ContainerDeploymentSource en manifest.metadata — el instalador lo
+          // recupera en DOWNLOAD (parseSourceContract) y desvía a la rama Docker.
+          metadata: {
+            vendor: "ALBRA",
+            category: build.contract.identity.category,
+            ...(build.deployment ? { deployment: build.deployment } : {}),
+          },
         },
         contract: build.contract,
         payload: {
           application: fileEntries(build.payload.application),
           seeds: build.payload.seeds,
           migrations: build.payload.migrations,
-          deployment: { adapter: "windows-local", installStrategy: "transactional-stage-commit" },
+          deployment: build.deployment
+            ? { adapter: "docker-compose", installStrategy: "pin-digest-strict-descriptor" }
+            : { adapter: "windows-local", installStrategy: "transactional-stage-commit" },
         },
       });
       writePackageFile(pkg);

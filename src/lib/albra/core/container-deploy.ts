@@ -285,9 +285,18 @@ export async function installContainerDeployment(input: InstallContainerInput): 
   // ENV_FILE_EXISTS → re-instalación: los secretos existentes se CONSERVAN (nunca se rotan en silencio).
 
   const pinned: Array<{ service: string; imageVar: string; image: string }> = [];
+  /** Dedupe por ref: varios servicios comparten imagen (p. ej. app/scheduler/
+   *  backup → CHISMOSO_IMAGE) y el pull+inspect se hace UNA sola vez. */
+  const refDigest = new Map<string, string>();
   for (const img of input.deployment.images) {
-    await input.onProgress?.(`Fijando digest de imagen: ${img.service} (${img.ref})`);
-    const digest = await pinImageDigest(runner, img.ref);
+    let digest = refDigest.get(img.ref);
+    if (!digest) {
+      await input.onProgress?.(`Fijando digest de imagen: ${img.service} (${img.ref})`);
+      digest = await pinImageDigest(runner, img.ref);
+      refDigest.set(img.ref, digest);
+    } else {
+      await input.onProgress?.(`Digest reutilizado para ${img.service} (${img.ref})`);
+    }
     pinned.push({ service: img.service, imageVar: img.imageVar, image: digest });
   }
 

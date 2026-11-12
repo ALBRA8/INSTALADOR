@@ -5,6 +5,7 @@
  * KREA y TRADING: bloqueados por entitlement (concepto futuro SaaS).
  */
 import type { ProductContract } from "@/lib/albra/contracts";
+import type { ContainerDeploymentSource } from "@/lib/albra/contracts/source";
 
 const ALL_OPS = [
   "INSTALL", "CONFIGURE", "START", "STOP", "RESTART", "UPDATE", "ROLLBACK",
@@ -615,7 +616,7 @@ networks:
 `;
 
 /** Declaración de despliegue embebida en manifest.metadata (contrato de fuente). */
-const CHISMOSO_DEPLOYMENT_SOURCE = {
+const CHISMOSO_DEPLOYMENT_SOURCE: ContainerDeploymentSource = {
   kind: "docker-compose",
   composeFile: "compose.albra.yaml",
   envFile: ".env.albra",
@@ -631,7 +632,7 @@ const CHISMOSO_DEPLOYMENT_SOURCE = {
   healthTimeoutSeconds: 180,
 } as const;
 
-const PANEL_DEPLOYMENT_SOURCE = {
+const PANEL_DEPLOYMENT_SOURCE: ContainerDeploymentSource = {
   kind: "docker-compose",
   composeFile: "compose.albra.yaml",
   envFile: ".env.albra",
@@ -655,6 +656,23 @@ const CHISMOSO_DEPLOYMENT_JSON = JSON.stringify(
   null, 2,
 );
 
+const PANEL_DEPLOYMENT_JSON = JSON.stringify(
+  { albra: "container-deployment-source/1", productId: "panel-de-control", deployment: PANEL_DEPLOYMENT_SOURCE },
+  null, 2,
+);
+
+/**
+ * Registro de despliegues contenedores por producto (ORDEN MAESTRA F2/F5):
+ * el bootstrap incrusta la declaración en manifest.metadata del paquete y el
+ * instalador la recupera en DOWNLOAD vía parseSourceContract.
+ */
+export const CONTAINER_DEPLOYMENT_SOURCES: Record<string, ContainerDeploymentSource> = {
+  "panel-de-control": PANEL_DEPLOYMENT_SOURCE,
+  chismoso: CHISMOSO_DEPLOYMENT_SOURCE,
+};
+
+export { CHISMOSO_DEPLOYMENT_JSON, PANEL_DEPLOYMENT_JSON };
+
 // ─────────────────── Package builds (bóveda) ───────────────────
 
 export interface PackageBuild {
@@ -662,6 +680,8 @@ export interface PackageBuild {
   version: string;
   displayName: string;
   contract: ProductContract;
+  /** ORDEN MAESTRA F2/F5: despliegue Docker Compose gestionado (opcional). */
+  deployment?: ContainerDeploymentSource;
   payload: {
     application: Array<{ path: string; content: string }>;
     seeds: { contacts?: unknown[]; deals?: unknown[]; leads?: unknown[] };
@@ -732,6 +752,7 @@ export const PACKAGE_BUILDS: PackageBuild[] = [
     version: "1.0.0",
     displayName: "ALBRA Panel de Control",
     contract: panelContract("1.0.0"),
+    deployment: PANEL_DEPLOYMENT_SOURCE,
     payload: {
       application: [
         { path: "compose.albra.yaml", content: PANEL_COMPOSE_ALBRA },
@@ -746,6 +767,7 @@ export const PACKAGE_BUILDS: PackageBuild[] = [
     version: "1.5.0",
     displayName: "ALBRA Agente Chismoso",
     contract: chismosoContract("1.5.0"),
+    deployment: CHISMOSO_DEPLOYMENT_SOURCE,
     payload: {
       application: [
         { path: "compose.albra.yaml", content: CHISMOSO_COMPOSE_ALBRA },
