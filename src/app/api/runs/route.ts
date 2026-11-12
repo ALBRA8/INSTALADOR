@@ -6,7 +6,7 @@ import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { getOpsToken, hasOpsToken, verifyOpsToken } from "@/lib/albra/core/ops";
 import { listRuns } from "@/lib/albra/core/runs";
-import { clampInt, errorResponse, toRunDTO } from "@/lib/albra/api-serialize";
+import { ApiError, clampInt, errorResponse, toRunDTO } from "@/lib/albra/api-serialize";
 
 export const dynamic = "force-dynamic";
 
