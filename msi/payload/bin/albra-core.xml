@@ -17,7 +17,9 @@
   <description>Núcleo del INSTALADOR ALBRA — API de operaciones (127.0.0.1:3000).</description>
 
   <executable>%BASE%\..\runtime\node.exe</executable>
-  <arguments>server.js</arguments>
+  <!-- boot.js garantiza ALBRA_HOME\db\core.db (desde data/template.db)
+       y construye DATABASE_URL antes de levantar server.js. -->
+  <arguments>boot.js</arguments>
   <workingdirectory>%BASE%\..\core</workingdirectory>
 
   <env name="PORT" value="3000"/>

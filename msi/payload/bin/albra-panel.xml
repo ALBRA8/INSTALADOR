@@ -7,9 +7,8 @@
 
   Reglas del proyecto:
     - Solo loopback (127.0.0.1): sin firewall, sin exposición de red.
-    - DATABASE_URL apunta a la BD del panel dentro de ALBRA_HOME.
-      NOTA de certificación: confirmar unidad real de %ProgramData%
-      (en instalaciones estándar es C:\ProgramData).
+    - La BD del panel vive en %ProgramData%\ALBRA\db\panel.db y la
+      garantiza boot.js (template con schema generado en CI).
     - NUNCA empaquetar secretos en el MSI ni aquí: EEC_OPERATOR_PASSWORD
       y EEC_API_TOKEN se definen en el primer arranque (asistente del
       operador) y viven en ALBRA_HOME con permisos restringidos.
@@ -20,13 +19,15 @@
   <description>Consola del operador ALBRA (127.0.0.1:3100).</description>
 
   <executable>%BASE%\..\runtime\node.exe</executable>
-  <arguments>server.js</arguments>
+  <!-- boot.js garantiza ALBRA_HOME\db\panel.db (desde data/template.db)
+       y construye DATABASE_URL antes de levantar server.js. -->
+  <arguments>boot.js</arguments>
   <workingdirectory>%BASE%\..\panel</workingdirectory>
 
   <env name="PORT" value="3100"/>
   <env name="HOSTNAME" value="127.0.0.1"/>
   <env name="NODE_ENV" value="production"/>
-  <env name="DATABASE_URL" value="file:C:\ProgramData\ALBRA\albra-data\panel\panel.db"/>
+  <env name="ALBRA_HOME" value="%ProgramData%\ALBRA"/>
   <env name="ALBRA_OPS_URL" value="http://127.0.0.1:3000"/>
 
   <startmode>Automatic</startmode>

@@ -32,13 +32,32 @@ referencia: "install and update the App Suite" — la suite se gestiona desde el
 |---|---|
 | `albra-installer.wxs` | Fuente canónica WiX 5 (schema v4/v5). UpgradeCode estable `{360B38CF-4B30-494D-87AA-067CDE534DF3}`. Harvest de `core/` y `panel/` con el elemento `<Files>` (WiX 5 nativo) |
 | `build.ps1` | Pipeline Windows/CI **canónico**: verifica payload → limpia marcadores → `wix build -arch x64` → evidencia SHA-256 |
+| `ci/assemble-payload.ps1` | Ensamblado del payload en CI: node.exe pinneado y verificado (SHA-256 vs SHASUMS256.txt oficial), WinSW pinneado, standalone core/panel, templates de BD (`prisma db push`) |
+| `.github/workflows/build-msi.yml` | Workflow GitHub Actions (`windows-latest`): build standalone de ambos repos → ensamblado → MSI → artifact; en tags `msi-v*` publica Release con `albra-sha256:` |
 | `build-linux-check.sh` | Gate de validación estructural en Linux/CI: compila el `.wxs` con el WiX 5 REAL → `.wixlib` (sin bind MSI) y verifica el harvest. Detecta errores antes de llegar a Windows |
 | `validate.py` | Validación estructural Python (32 checks: schema, refs, directorios, harvest, naming, sin secretos) |
 | `payload/` | Lo que se instala. `core/`, `panel/`, `runtime/` y los `.exe` de servicio **no se versionan** (ver `payload/README.md`) |
-| `payload/bin/*.xml` | Configuración WinSW de los dos servicios (loopback only, auto-restart, logs) |
+| `payload/bin/*.xml` | Configuración WinSW de los dos servicios (loopback only, auto-restart, logs, `boot.js`) |
 | `payload/README.txt` | Texto que queda instalado en la máquina del usuario |
 
 ## Construcción (Windows/CI — canónica, requiere WiX 5)
+
+### Vía GitHub Actions (recomendada — cero setup local)
+
+`.github/workflows/build-msi.yml` hace TODO en un runner `windows-latest`:
+build standalone de INSTALADOR y PANEL → ensamblado del payload → MSI →
+artifact. En tags `msi-vX.Y.Z` además publica el Release con el asset y su
+línea `albra-sha256:` (la cadena de confianza ALBRA rechaza assets sin
+checksum declarado — `docs/GITHUB-SOURCES.md`).
+
+```bash
+# build manual (solo artifact):
+gh workflow run build-msi -R ALBRA8/INSTALADOR -f version=0.1.0
+# release:
+git tag msi-v0.1.0 && git push origin msi-v0.1.0
+```
+
+### Vía local (Windows con dotnet SDK 8+)
 
 ```powershell
 dotnet tool install --global wix --version 5.0.2
@@ -71,8 +90,8 @@ o fuentes se detecta ANTES de llegar a la máquina Windows.
 
 | Componente | Detalle |
 |---|---|
-| Servicio `AlbraCore` | WinSW wrapper → `node core\server.js`, puerto 3000, solo loopback, auto + restart |
-| Servicio `AlbraPanel` | WinSW wrapper → `node panel\server.js`, puerto 3100, solo loopback, auto + restart |
+| Servicio `AlbraCore` | WinSW wrapper → `node core\boot.js`: garantiza `%ProgramData%\ALBRA\db\core.db` (desde `data/template.db`, schema generado en CI) y construye `DATABASE_URL` antes de levantar `server.js`. Puerto 3000, solo loopback, auto + restart |
+| Servicio `AlbraPanel` | ídem con `panel\boot.js` → `panel.db`. Puerto 3100, solo loopback, auto + restart |
 | Runtime | `node.exe` embebido en `%ProgramFiles%\ALBRA\runtime` — cero requisitos de runtime para el usuario |
 | Acceso directo | `ALBRA Panel.url` en Inicio > ALBRA (abre 127.0.0.1:3100) |
 | Upgrade | `MajorUpgrade` con `UpgradeCode` estable: instalar encima actualiza; downgrade bloqueado |
