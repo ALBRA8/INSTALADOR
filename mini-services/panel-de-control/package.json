@@ -1,0 +1,7 @@
+{
+  "name": "panel-de-control",
+  "private": true,
+  "scripts": {
+    "dev": "bash start-panel.sh"
+  }
+}
