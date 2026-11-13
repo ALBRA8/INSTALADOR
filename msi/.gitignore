@@ -1,0 +1,10 @@
+dist/
+obj/
+payload/core/*
+payload/panel/*
+payload/runtime/*
+payload/bin/albra-core.exe
+payload/bin/albra-panel.exe
+!payload/core/.gitkeep
+!payload/panel/.gitkeep
+!payload/runtime/.gitkeep

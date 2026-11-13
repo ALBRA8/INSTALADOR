@@ -1,0 +1,41 @@
+<!--
+  ALBRA Panel — configuración del servicio Windows (WinSW).
+
+  albra-panel.exe es el binario WinSW-x64.exe renombrado; este XML debe
+  vivir a su lado con el mismo nombre base. El MSI lo registra como
+  servicio "AlbraPanel" (auto) y lo detiene/elimina al desinstalar.
+
+  Reglas del proyecto:
+    - Solo loopback (127.0.0.1): sin firewall, sin exposición de red.
+    - DATABASE_URL apunta a la BD del panel dentro de ALBRA_HOME.
+      NOTA de certificación: confirmar unidad real de %ProgramData%
+      (en instalaciones estándar es C:\ProgramData).
+    - NUNCA empaquetar secretos en el MSI ni aquí: EEC_OPERATOR_PASSWORD
+      y EEC_API_TOKEN se definen en el primer arranque (asistente del
+      operador) y viven en ALBRA_HOME con permisos restringidos.
+-->
+<service>
+  <id>AlbraPanel</id>
+  <name>ALBRA Panel de Control</name>
+  <description>Consola del operador ALBRA (127.0.0.1:3100).</description>
+
+  <executable>%BASE%\..\runtime\node.exe</executable>
+  <arguments>server.js</arguments>
+  <workingdirectory>%BASE%\..\panel</workingdirectory>
+
+  <env name="PORT" value="3100"/>
+  <env name="HOSTNAME" value="127.0.0.1"/>
+  <env name="NODE_ENV" value="production"/>
+  <env name="DATABASE_URL" value="file:C:\ProgramData\ALBRA\albra-data\panel\panel.db"/>
+  <env name="ALBRA_OPS_URL" value="http://127.0.0.1:3000"/>
+
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="20 sec"/>
+
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

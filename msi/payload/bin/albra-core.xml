@@ -1,0 +1,37 @@
+<!--
+  ALBRA Core — configuración del servicio Windows (WinSW).
+
+  albra-core.exe es el binario WinSW-x64.exe renombrado; este XML debe
+  vivir a su lado con el mismo nombre base. El MSI lo registra como
+  servicio "AlbraCore" (auto) y lo detiene/elimina al desinstalar.
+
+  Reglas del proyecto:
+    - Solo loopback (127.0.0.1): sin firewall, sin exposición de red.
+    - Los datos viven en ALBRA_HOME = %ProgramData%\ALBRA.
+    - NUNCA empaquetar secretos aquí: las credenciales del operador se
+      configuran en el primer arranque del PANEL.
+-->
+<service>
+  <id>AlbraCore</id>
+  <name>ALBRA Core</name>
+  <description>Núcleo del INSTALADOR ALBRA — API de operaciones (127.0.0.1:3000).</description>
+
+  <executable>%BASE%\..\runtime\node.exe</executable>
+  <arguments>server.js</arguments>
+  <workingdirectory>%BASE%\..\core</workingdirectory>
+
+  <env name="PORT" value="3000"/>
+  <env name="HOSTNAME" value="127.0.0.1"/>
+  <env name="NODE_ENV" value="production"/>
+  <env name="ALBRA_HOME" value="%ProgramData%\ALBRA"/>
+
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="20 sec"/>
+
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

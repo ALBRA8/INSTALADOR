@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ============================================================
+  ALBRA Bootstrap MSI — proyecto WiX Toolset 5 (schema v4/v5)
+
+  Producto final:  albra-installer-<version>-windows-x64.msi
+  Referencia:      instalador nativo doble-clic que despliega el
+                   plano de control ALBRA (INSTALADOR + PANEL) como
+                   servicios de Windows y deja la suite de agentes
+                   gestionada desde el PANEL.
+
+  Construcción:    SOLO en Windows/CI con `wix build` (ver build.ps1
+                   y README.md). Este archivo no compila con WiX 3.
+============================================================= -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package
+      Name="ALBRA"
+      Manufacturer="ALBRA"
+      Version="$(var.AlbraVersion)"
+      UpgradeCode="{360B38CF-4B30-494D-87AA-067CDE534DF3}"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033"
+      Codepage="1252"
+      InstallerVersion="500">
+
+    <SummaryInformation
+        Description="ALBRA: instala y actualiza la suite de agentes ALBRA"
+        Comments="Este instalador despliega el plano de control ALBRA (INSTALADOR + PANEL) como servicios de Windows." />
+
+    <!-- Upgrade mayor: misma UpgradeCode reemplaza versiones previas -->
+    <MajorUpgrade DowngradeErrorMessage="Ya hay una versión más reciente de [ProductName] instalada. Desinstálala antes de continuar." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="0" />
+
+    <!-- ============================================================
+      Layout en disco (x64):
+        %ProgramFiles%\ALBRA\
+          bin\      → servicios (wrappers WinSW + configuración XML)
+          core\     → build standalone del INSTALADOR  (127.0.0.1:3000)
+          panel\    → build standalone del PANEL       (127.0.0.1:3100)
+          runtime\  → node.exe embebido (sin requisitos de runtime para el usuario)
+        Datos de ejecución: %ProgramData%\ALBRA  (ALBRA_HOME — bóveda, llaves, BD, logs)
+      Ambos servicios escuchan SOLO en 127.0.0.1 (sin regla de firewall necesaria).
+    ============================================================= -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="ALBRA">
+        <Directory Id="BinDir" Name="bin" />
+        <Directory Id="CoreDir" Name="core" />
+        <Directory Id="PanelDir" Name="panel" />
+        <Directory Id="RuntimeDir" Name="runtime" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AlbraMenuDir" Name="ALBRA" />
+    </StandardDirectory>
+
+    <!-- Harvest de core\ y panel\: generado por build.ps1 con `wix heat`
+         (grupos CoreFiles y PanelFiles). Los componentes de bin\, runtime\,
+         shortcuts y el acceso directo van explícitos aquí abajo. -->
+    <Feature Id="Main"
+             Title="ALBRA"
+             Description="Plano de control ALBRA: INSTALADOR + PANEL como servicios de Windows."
+             Level="1"
+             AllowAbsent="no">
+      <ComponentGroupRef Id="AlbraBin" />
+      <ComponentGroupRef Id="AlbraRuntime" />
+      <ComponentGroupRef Id="AlbraShortcuts" />
+      <ComponentGroupRef Id="CoreFiles" />
+      <ComponentGroupRef Id="PanelFiles" />
+    </Feature>
+  </Package>
+
+  <!-- ============================================================
+    SERVICIOS (bin\)
+    albra-core.exe / albra-panel.exe son el binario WinSW renombrado;
+    su configuración vive en el XML homónimo (ver payload/bin/*.xml).
+    El paquete NUNCA incluye secretos: las credenciales del operador
+    se configuran en el primer arranque, nunca en el instalador.
+  ============================================================= -->
+  <Fragment>
+    <ComponentGroup Id="AlbraBin" Directory="BinDir">
+      <Component Id="AlbraCoreSvcExe" Guid="*">
+        <File Id="AlbraCoreExe" Name="albra-core.exe" Source="payload\bin\albra-core.exe" KeyPath="yes" />
+        <ServiceInstall Id="AlbraCoreService"
+                        Name="AlbraCore"
+                        DisplayName="ALBRA Core"
+                        Description="Núcleo del INSTALADOR ALBRA — API de operaciones (127.0.0.1:3000)."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Vital="yes" />
+        <ServiceControl Id="AlbraCoreServiceCtl"
+                        Name="AlbraCore"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+      <Component Id="AlbraCoreSvcCfg" Guid="*">
+        <File Id="AlbraCoreXml" Name="albra-core.xml" Source="payload\bin\albra-core.xml" KeyPath="yes" />
+      </Component>
+      <Component Id="AlbraPanelSvcExe" Guid="*">
+        <File Id="AlbraPanelExe" Name="albra-panel.exe" Source="payload\bin\albra-panel.exe" KeyPath="yes" />
+        <ServiceInstall Id="AlbraPanelService"
+                        Name="AlbraPanel"
+                        DisplayName="ALBRA Panel de Control"
+                        Description="Consola del operador ALBRA (127.0.0.1:3100)."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Vital="yes" />
+        <ServiceControl Id="AlbraPanelServiceCtl"
+                        Name="AlbraPanel"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+      <Component Id="AlbraPanelSvcCfg" Guid="*">
+        <File Id="AlbraPanelXml" Name="albra-panel.xml" Source="payload\bin\albra-panel.xml" KeyPath="yes" />
+      </Component>
+      <Component Id="PayloadReadme" Guid="*">
+        <File Id="PayloadReadmeTxt" Name="README.txt" Source="payload\README.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- Runtime Node embebido (harvest explícito: node.exe y su árbol de licencias) -->
+  <Fragment>
+    <ComponentGroup Id="AlbraRuntime" Directory="RuntimeDir">
+      <Component Id="NodeRuntimeExe" Guid="*">
+        <File Id="NodeExe" Name="node.exe" Source="payload\runtime\node.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- Accesos directos: el .url (texto plano INI) instalado en el menú
+       Inicio abre el PANEL en el navegador por defecto. -->
+  <Fragment>
+    <ComponentGroup Id="AlbraShortcuts" Directory="AlbraMenuDir">
+      <Component Id="PanelUrlShortcut" Guid="*">
+        <File Id="AlbraPanelUrl" Name="ALBRA Panel.url" Source="payload\shortcuts\albra-panel.url" KeyPath="yes" />
+        <RemoveFolder Id="RemoveAlbraMenuDir" On="uninstall" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>
