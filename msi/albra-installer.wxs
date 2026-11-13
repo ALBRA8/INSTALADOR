@@ -58,9 +58,10 @@
       <Directory Id="AlbraMenuDir" Name="ALBRA" />
     </StandardDirectory>
 
-    <!-- Harvest de core\ y panel\: generado por build.ps1 con `wix heat`
-         (grupos CoreFiles y PanelFiles). Los componentes de bin\, runtime\,
-         shortcuts y el acceso directo van explícitos aquí abajo. -->
+    <!-- Harvest de core\ y panel\: los grupos CoreFiles y PanelFiles usan el
+         elemento <Files> de WiX 4+/5 (wildcards en build time — reemplazo
+         oficial de heat, que ya no existe como comando en WiX 5). Los
+         componentes de bin\, runtime\, shortcuts van explícitos aquí abajo. -->
     <Feature Id="Main"
              Title="ALBRA"
              Description="Plano de control ALBRA: INSTALADOR + PANEL como servicios de Windows."
@@ -75,6 +76,25 @@
   </Package>
 
   <!-- ============================================================
+    Harvest nativo WiX 5 de los builds standalone (core y panel).
+    <Files> con wildcards recorre el árbol completo en build time y
+    genera componentes por archivo (equivalente a `heat -gg -sfrag
+    -srd`), con GUIDs deterministas derivados de la ruta. El paquete
+    queda reproducible: mismo árbol → mismo MSI.
+  ============================================================= -->
+  <Fragment>
+    <ComponentGroup Id="CoreFiles" Directory="CoreDir">
+      <Files Include="payload/core/**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="PanelFiles" Directory="PanelDir">
+      <Files Include="payload/panel/**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- ============================================================
     SERVICIOS (bin\)
     albra-core.exe / albra-panel.exe son el binario WinSW renombrado;
     su configuración vive en el XML homónimo (ver payload/bin/*.xml).
@@ -84,7 +104,7 @@
   <Fragment>
     <ComponentGroup Id="AlbraBin" Directory="BinDir">
       <Component Id="AlbraCoreSvcExe" Guid="*">
-        <File Id="AlbraCoreExe" Name="albra-core.exe" Source="payload\bin\albra-core.exe" KeyPath="yes" />
+        <File Id="AlbraCoreExe" Name="albra-core.exe" Source="payload/bin/albra-core.exe" KeyPath="yes" />
         <ServiceInstall Id="AlbraCoreService"
                         Name="AlbraCore"
                         DisplayName="ALBRA Core"
@@ -101,10 +121,10 @@
                         Wait="yes" />
       </Component>
       <Component Id="AlbraCoreSvcCfg" Guid="*">
-        <File Id="AlbraCoreXml" Name="albra-core.xml" Source="payload\bin\albra-core.xml" KeyPath="yes" />
+        <File Id="AlbraCoreXml" Name="albra-core.xml" Source="payload/bin/albra-core.xml" KeyPath="yes" />
       </Component>
       <Component Id="AlbraPanelSvcExe" Guid="*">
-        <File Id="AlbraPanelExe" Name="albra-panel.exe" Source="payload\bin\albra-panel.exe" KeyPath="yes" />
+        <File Id="AlbraPanelExe" Name="albra-panel.exe" Source="payload/bin/albra-panel.exe" KeyPath="yes" />
         <ServiceInstall Id="AlbraPanelService"
                         Name="AlbraPanel"
                         DisplayName="ALBRA Panel de Control"
@@ -121,10 +141,10 @@
                         Wait="yes" />
       </Component>
       <Component Id="AlbraPanelSvcCfg" Guid="*">
-        <File Id="AlbraPanelXml" Name="albra-panel.xml" Source="payload\bin\albra-panel.xml" KeyPath="yes" />
+        <File Id="AlbraPanelXml" Name="albra-panel.xml" Source="payload/bin/albra-panel.xml" KeyPath="yes" />
       </Component>
       <Component Id="PayloadReadme" Guid="*">
-        <File Id="PayloadReadmeTxt" Name="README.txt" Source="payload\README.txt" KeyPath="yes" />
+        <File Id="PayloadReadmeTxt" Name="README.txt" Source="payload/README.txt" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>
@@ -133,7 +153,7 @@
   <Fragment>
     <ComponentGroup Id="AlbraRuntime" Directory="RuntimeDir">
       <Component Id="NodeRuntimeExe" Guid="*">
-        <File Id="NodeExe" Name="node.exe" Source="payload\runtime\node.exe" KeyPath="yes" />
+        <File Id="NodeExe" Name="node.exe" Source="payload/runtime/node.exe" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>
@@ -143,7 +163,7 @@
   <Fragment>
     <ComponentGroup Id="AlbraShortcuts" Directory="AlbraMenuDir">
       <Component Id="PanelUrlShortcut" Guid="*">
-        <File Id="AlbraPanelUrl" Name="ALBRA Panel.url" Source="payload\shortcuts\albra-panel.url" KeyPath="yes" />
+        <File Id="AlbraPanelUrl" Name="ALBRA Panel.url" Source="payload/shortcuts/albra-panel.url" KeyPath="yes" />
         <RemoveFolder Id="RemoveAlbraMenuDir" On="uninstall" />
       </Component>
     </ComponentGroup>

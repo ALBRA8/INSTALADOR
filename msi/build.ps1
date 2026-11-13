@@ -1,12 +1,16 @@
 # ============================================================
-#  ALBRA Bootstrap MSI — build (Windows / CI)
+#  ALBRA Bootstrap MSI — build (Windows / CI)  [CANÓNICO]
 #
 #  Requisitos:
 #    - Windows 10+ / Windows Server
 #    - .NET SDK 8+          https://dotnet.microsoft.com/download
-#    - WiX Toolset 5:       dotnet tool install --global wix
+#    - WiX Toolset 5.0.2:   dotnet tool install --global wix --version 5.0.2
 #    - Payload ensamblado   (ver payload/README.md — build.ps1 NO lo
 #                           genera: verifica y falla si falta algo)
+#
+#  Nota WiX 5: `wix heat` NO existe (se eliminó en WiX 4+). El harvest
+#  de core/ y panel/ vive en el propio .wxs vía el elemento <Files>
+#  con wildcards — no hay paso de harvest externo.
 #
 #  Uso:
 #    powershell -ExecutionPolicy Bypass -File build.ps1
@@ -29,9 +33,10 @@ Write-Host "=== ALBRA Bootstrap MSI — build v$Version ===" -ForegroundColor Cy
 try {
     $wixVer = (& wix --version) 2>$null
     if (-not $wixVer) { throw "sin salida" }
+    if (-not ($wixVer -match '^5\.')) { throw "versión $wixVer no es 5.x" }
     Write-Host "[ok] WiX Toolset $wixVer"
 } catch {
-    Write-Error "WiX Toolset 5 no está instalado. Ejecutar:  dotnet tool install --global wix"
+    Write-Error "WiX Toolset 5 no está instalado (o es otra serie). Ejecutar:  dotnet tool install --global wix --version 5.0.2"
     exit 1
 }
 
@@ -57,23 +62,25 @@ if (-not $SkipPayloadCheck) {
     Write-Warning "Verificación de payload OMITIDA (-SkipPayloadCheck)"
 }
 
-# --- 3. Harvest del árbol de binarios (core y panel) ------------------------
-New-Item -ItemType Directory -Force -Path (Join-Path $root "obj") | Out-Null
+# --- 3. Limpieza de marcadores de repo dentro del payload -------------------
+#    .gitkeep y .DS_Store no deben entrar al MSI (el <Files> harvesta todo).
+$markers = Get-ChildItem -Path (Join-Path $root "payload") -Recurse -Force -File |
+    Where-Object { $_.Name -in @(".gitkeep", ".DS_Store") }
+foreach ($m in $markers) {
+    Remove-Item $m.FullName -Force
+    Write-Host "[ok] marcador eliminado del payload: $($m.FullName.Substring($root.Length + 1))"
+}
+
+# --- 4. Compilación ----------------------------------------------------------
+#    -arch x64 es OBLIGATORIO: el default de wix build es x86 y el producto
+#    es windows-x64 (ProgramFiles64Folder, componentes de 64 bits).
+New-Item -ItemType Directory -Force -Path (Join-Path $root "dist") | Out-Null
 Push-Location $root
 try {
-    & wix heat dir "payload\core"  -out "obj\core-files.wxs"  -cg CoreFiles  -dr CoreDir  -gg -sfrag -srd -var var.CoreSource
-    if ($LASTEXITCODE -ne 0) { throw "wix heat (core) falló" }
-    & wix heat dir "payload\panel" -out "obj\panel-files.wxs" -cg PanelFiles -dr PanelDir -gg -sfrag -srd -var var.PanelSource
-    if ($LASTEXITCODE -ne 0) { throw "wix heat (panel) falló" }
-    Write-Host "[ok] harvest core + panel"
-
-    # --- 4. Compilación ------------------------------------------------------
-    New-Item -ItemType Directory -Force -Path (Join-Path $root "dist") | Out-Null
     $out = "dist\albra-installer-$Version-windows-x64.msi"
-    & wix build "albra-installer.wxs" "obj\core-files.wxs" "obj\panel-files.wxs" `
+    & wix build "albra-installer.wxs" `
+        -arch x64 `
         -define "AlbraVersion=$Version" `
-        -define "CoreSource=payload\core" `
-        -define "PanelSource=payload\panel" `
         -out $out
     if ($LASTEXITCODE -ne 0) { throw "wix build falló" }
 } finally {

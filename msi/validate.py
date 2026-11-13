@@ -90,7 +90,7 @@ if tree is not None:
         else:
             err(f"directorio faltante: {needed}")
 
-    # --- 5. Feature → ComponentGroupRef (los de heat los genera build.ps1) ----
+    # --- 5. Feature → ComponentGroupRef (harvest vía <Files> en el wxs) -----
     group_ids = {
         el.get("Id")
         for el in tree.getroot().iter()
@@ -104,36 +104,49 @@ if tree is not None:
         refs = [r.get("Id", "") for r in feature.findall(f"{{{WIX_V4_NS}}}ComponentGroupRef")]
         good(f"Feature 'Main' referencia {len(refs)} grupos: {', '.join(refs)}")
 
-    build_ps1 = (ROOT / "build.ps1").read_text(encoding="utf-8-sig")
     for ref in refs:
         if ref in group_ids:
             good(f"grupo {ref}: definido en el wxs")
-        elif f"-cg {ref} " in build_ps1 or f"-cg {ref}\n" in build_ps1:
-            good(f"grupo {ref}: generado por `wix heat -cg {ref}` en build.ps1")
         else:
-            err(f"grupo {ref}: ni definido en wxs ni generado por heat en build.ps1")
+            err(f"grupo {ref}: referenciado por la Feature pero sin definición en el wxs")
 
     for g in group_ids:
         if g not in refs:
             err(f"grupo {g} definido pero no referenciado por la Feature")
 
-    # heat -dr debe apuntar a directorios existentes
-    for m in re.finditer(r"-dr (\w+)", build_ps1):
-        d = m.group(1)
-        if d in dir_ids:
-            good(f"heat -dr {d}: directorio existe en wxs")
+    # --- 5b. Harvest <Files> de core y panel (WiX 5 nativo, sin heat) --------
+    build_ps1 = (ROOT / "build.ps1").read_text(encoding="utf-8-sig")
+    files_harvest = {
+        el.get("Include", "")
+        for el in tree.getroot().iter(f"{{{WIX_V4_NS}}}Files")
+    }
+    for expected in ("payload/core/**", "payload/panel/**"):
+        if expected in files_harvest:
+            good(f"harvest <Files Include=\"{expected}\"> definido en el wxs")
         else:
-            err(f"heat -dr {d}: directorio inexistente en wxs")
+            err(f"falta harvest <Files Include=\"{expected}\"> en el wxs")
+    if re.search(r"wix\s+heat\s+[a-z]", build_ps1):
+        err("build.ps1 sigue invocando `wix heat` — eliminado en WiX 4+ (usar <Files>)")
+    else:
+        good("build.ps1 sin heat (WiX 5: harvest nativo <Files>)")
+    if '-arch x64' in build_ps1:
+        good("build.ps1 compila con -arch x64 (producto windows-x64)")
+    else:
+        err("build.ps1 sin -arch x64 (el default de wix build es x86)")
 
     # --- 6. Ficheros referenciados por File/@Source presentes en el repo ------
     #      (los del payload dinámico — core/panel/runtime/exe — se ensamblan en
     #      Windows y están gitignoreados; su ausencia aquí es esperada.)
-    dynamic_prefixes = ("payload\\core\\", "payload\\panel\\", "payload\\runtime\\",
-                        "payload\\bin\\albra-core.exe", "payload\\bin\\albra-panel.exe")
+    #      Regla cross-platform: los Source deben usar separador "/" (WiX en
+    #      Windows y Linux lo aceptan; "\" rompe el build en CI POSIX).
+    dynamic_prefixes = ("payload/core/", "payload/panel/", "payload/runtime/",
+                        "payload/bin/albra-core.exe", "payload/bin/albra-panel.exe")
     for f in tree.getroot().iter(f"{{{WIX_V4_NS}}}File"):
-        src = (f.get("Source") or "").replace("\\", "/")
+        src = f.get("Source") or ""
+        if "\\" in src:
+            err(f"File/@Source con separador backslash (usar '/'): {src}")
         rel = Path(src)
-        if any(src.startswith(p.replace("\\", "/")) for p in dynamic_prefixes):
+        if any(src.startswith(p) for p in dynamic_prefixes):
             good(f"payload dinámico (esperado ausente aquí): {src}")
         elif (ROOT / rel).exists():
             good(f"archivo del payload presente: {src}")
