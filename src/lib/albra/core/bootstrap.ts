@@ -28,34 +28,36 @@ async function doBootstrap(): Promise<void> {
   for (const build of PACKAGE_BUILDS) {
     const fileName = `${build.packageId}-${build.version}.albra`;
     const fp = packageFilePath(fileName);
+    // El paquete se construye SIEMPRE en memoria: sirve para crear el archivo
+    // si falta y para el auto-sanado de payloads desfasados (ver abajo).
+    const freshPkg = buildPackage({
+      manifest: {
+        packageId: build.packageId,
+        version: build.version,
+        channel: "stable",
+        displayName: build.displayName,
+        createdAt: new Date().toISOString(),
+        // ORDEN MAESTRA F2/F5: los productos contenedores incrustan su
+        // ContainerDeploymentSource en manifest.metadata — el instalador lo
+        // recupera en DOWNLOAD (parseSourceContract) y desvía a la rama Docker.
+        metadata: {
+          vendor: "ALBRA",
+          category: build.contract.identity.category,
+          ...(build.deployment ? { deployment: build.deployment } : {}),
+        },
+      },
+      contract: build.contract,
+      payload: {
+        application: fileEntries(build.payload.application),
+        seeds: build.payload.seeds,
+        migrations: build.payload.migrations,
+        deployment: build.deployment
+          ? { adapter: "docker-compose", installStrategy: "pin-digest-strict-descriptor" }
+          : { adapter: "windows-local", installStrategy: "transactional-stage-commit" },
+      },
+    });
     if (!fs.existsSync(fp)) {
-      const pkg = buildPackage({
-        manifest: {
-          packageId: build.packageId,
-          version: build.version,
-          channel: "stable",
-          displayName: build.displayName,
-          createdAt: new Date().toISOString(),
-          // ORDEN MAESTRA F2/F5: los productos contenedores incrustan su
-          // ContainerDeploymentSource en manifest.metadata — el instalador lo
-          // recupera en DOWNLOAD (parseSourceContract) y desvía a la rama Docker.
-          metadata: {
-            vendor: "ALBRA",
-            category: build.contract.identity.category,
-            ...(build.deployment ? { deployment: build.deployment } : {}),
-          },
-        },
-        contract: build.contract,
-        payload: {
-          application: fileEntries(build.payload.application),
-          seeds: build.payload.seeds,
-          migrations: build.payload.migrations,
-          deployment: build.deployment
-            ? { adapter: "docker-compose", installStrategy: "pin-digest-strict-descriptor" }
-            : { adapter: "windows-local", installStrategy: "transactional-stage-commit" },
-        },
-      });
-      writePackageFile(pkg);
+      writePackageFile(freshPkg);
     }
     const raw = JSON.parse(fs.readFileSync(fp, "utf-8")) as AlbraPackage;
     const verdict = verifyPackage(raw);
@@ -77,6 +79,20 @@ async function doBootstrap(): Promise<void> {
         verified: verdict.valid,
       },
     });
+
+    // AUTO-SANADO DE BÓVEDA: el paquete en disco es DERIVABLE del código, no
+    // un estado del usuario. Si su payload difiere de la definición vigente
+    // (p. ej. paquete de una build anterior sin el runtime instrumentado
+    // ALBRA-PRODUCT-RUNTIME), se regenera en el arranque.
+    const freshPayload = JSON.stringify(freshPkg.payload);
+    if (JSON.stringify(raw.payload) !== freshPayload) {
+      await log({
+        channel: "SYSTEM",
+        productId: build.packageId,
+        message: `Bóveda auto-sanada: ${fileName} regenerado (payload desfasado en disco)`,
+      });
+      writePackageFile(freshPkg);
+    }
   }
 
   // Paquete tampered (demo de seguridad: firma inválida → RECHAZADO)
