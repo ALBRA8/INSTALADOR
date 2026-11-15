@@ -133,6 +133,15 @@ model LifecycleRun {
   finishedAt DateTime?
 }
 
+// Durable anti-replay registry for authenticated EEC operations.
+model EecNonce {
+  nonce     String   @id
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
 model AuditEvent {
   id        String   @id @default(cuid())
   type      String // INSTALL_STARTED, INSTALL_COMPLETED, ...
