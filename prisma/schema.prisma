@@ -146,6 +146,21 @@ model EecNonce {
   @@index([expiresAt])
 }
 
+// Idempotencia durable por requestId (contrato EEC ops): una solicitud
+// repetida (retry de red, reintento del PANEL) devuelve el resultado
+// almacenado — JAMÁS re-ejecuta la operación. Solo se registran solicitudes
+// que llegaron a despacharse (resultados y fallos de operación); los
+// rechazos de protocolo (contrato/ventana/nonce) no se registran.
+model EecOperationResult {
+  requestId  String   @id
+  operation  String
+  productId  String
+  accepted   Boolean
+  resultJson Json?
+  errorJson  Json?
+  createdAt  DateTime @default(now())
+}
+
 model AuditEvent {
   id        String   @id @default(cuid())
   type      String // INSTALL_STARTED, INSTALL_COMPLETED, ...

@@ -227,21 +227,51 @@ export async function executeOps(raw: unknown, actor = "EEC"): Promise<EecOpsRes
     return reject("REQUEST_EXPIRED", `Solicitud ${request.requestId} fuera de la ventana temporal permitida`);
   }
 
-  // 5) Anti-replay persistente y atómico (clave única en SQLite/Prisma).
+  // 5) Idempotencia durable por requestId: una solicitud repetida (retry de
+  // red, reintento del PANEL con el mismo requestId) devuelve el resultado
+  // ORIGINAL sin re-ejecutar. Se consulta ANTES del nonce: un reintento exacto
+  // reutiliza el nonce y el nonce-check lo rechazaría como replay.
+  const prior = await db.eecOperationResult.findUnique({ where: { requestId: request.requestId } });
+  if (prior) {
+    await audit({ type: "OPS_EXECUTED", actor, productId: prior.productId, detail: { op: prior.operation, idempotentReplay: true, requestId: prior.requestId } });
+    return {
+      contractVersion: EEC_OPS_CONTRACT_VERSION,
+      requestId: prior.requestId,
+      accepted: prior.accepted,
+      operation: prior.operation as typeof request.operation,
+      productId: prior.productId,
+      ...(prior.resultJson != null ? { result: prior.resultJson as EecOpsResult } : {}),
+      ...(prior.errorJson != null ? { error: prior.errorJson as EecOpsResponse["error"] } : {}),
+    };
+  }
+
+  // 6) Anti-replay persistente y atómico (clave única en SQLite/Prisma).
   const nonceRegistered = await registerNonceOnce(request.nonce, new Date(expiresAt), new Date(now));
   if (!nonceRegistered) {
     return reject("NONCE_REPLAYED", `Nonce ya utilizado (requestId ${request.requestId})`);
   }
 
-  // 6) Despacho a los motores REALES del INSTALADOR
-  const ok = (result: EecOpsResult): EecOpsResponse => ({
-    contractVersion: EEC_OPS_CONTRACT_VERSION,
-    requestId: request.requestId,
-    accepted: true,
-    operation: request.operation,
-    productId: request.productId,
-    ...(Object.keys(result).length > 0 ? { result } : {}),
-  });
+  // 7) Despacho a los motores REALES del INSTALADOR
+  const ok = (result: EecOpsResult): EecOpsResponse => {
+    // Registro durable de idempotencia: este requestId YA fue procesado.
+    void db.eecOperationResult.create({
+      data: {
+        requestId: request.requestId,
+        operation: request.operation,
+        productId: request.productId,
+        accepted: true,
+        resultJson: Object.keys(result).length > 0 ? (result as object) : undefined,
+      },
+    }).catch(() => { /* el resultado real ya salió; el fallo de registro queda auditado en el catch superior */ });
+    return {
+      contractVersion: EEC_OPS_CONTRACT_VERSION,
+      requestId: request.requestId,
+      accepted: true,
+      operation: request.operation,
+      productId: request.productId,
+      ...(Object.keys(result).length > 0 ? { result } : {}),
+    };
+  };
 
   try {
     let result: EecOpsResult;
@@ -461,6 +491,18 @@ export async function executeOps(raw: unknown, actor = "EEC"): Promise<EecOpsRes
       severity: "ERROR",
       detail: { operation: request.operation, requestId: request.requestId, code: mapped.code, reason: mapped.message },
     });
+    // Idempotencia durable también del FALLO: este requestId fue procesado
+    // (la operación falló); un reintento con el mismo requestId devuelve este
+    // mismo error en lugar de re-ejecutar.
+    await db.eecOperationResult.create({
+      data: {
+        requestId: request.requestId,
+        operation: request.operation,
+        productId: request.productId,
+        accepted: false,
+        errorJson: mapped as object,
+      },
+    }).catch(() => { /* no bloquear la respuesta de error por un fallo de registro */ });
     return {
       contractVersion: EEC_OPS_CONTRACT_VERSION,
       requestId: request.requestId,
