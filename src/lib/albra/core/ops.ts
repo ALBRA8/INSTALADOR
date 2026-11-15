@@ -86,15 +86,23 @@ export function verifyOpsToken(provided: string, expected: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
+function isLoopbackForwarded(value: string): boolean {
+  const ip = value.trim().split(",")[0]?.trim().replace(/^\[|\]$/g, "") ?? "";
+  return ip === "::1" || ip === "127.0.0.1" || ip.startsWith("127.") || ip === "::ffff:127.0.0.1";
+}
+
 /**
  * Acceso a endpoints de lectura de runs (polling EEC y consola local).
  *
  * Dos caminos legítimos:
  *  1. Bearer ops-token válido (PANEL / EEC — contrato autenticado, desde cualquier red).
- *  2. Conexión DIRECTA local sin proxy delante (consola del PC real apuntando a
- *     127.0.0.1:3000). Caddy reescribe X-Forwarded-For con la IP real del cliente,
- *     así que la presencia de ese header identifica de forma fiable tránsito por
- *     gateway → exige token. Sin XFF = socket directo al servicio = consola local.
+ *  2. Conexión DIRECTA local (consola del PC real apuntando a 127.0.0.1:3000).
+ *
+ * Detección de gateway por VALOR: el dev server de Next inyecta
+ * `x-forwarded-for: ::1` en toda petición, y Caddy REESCRIBE XFF con la IP
+ * real del cliente. XFF ausente o loopback = local; XFF con IP no-loopback =
+ * tránsito por proxy → exige token. Spoof: Caddy sobrescribe el header, y un
+ * atacante capaz de hablar directo al socket ya es local (consola de confianza).
  *
  * Fail-closed: cualquier otra combinación → 401.
  */
@@ -104,7 +112,11 @@ export async function verifyRunAccess(req: Request): Promise<boolean> {
   if (provided.length > 0 && (await hasOpsToken()) && verifyOpsToken(provided, await getOpsToken())) {
     return true;
   }
-  const viaGateway = req.headers.has("x-forwarded-for") || req.headers.has("x-real-ip");
+  const xff = req.headers.get("x-forwarded-for");
+  const realIp = req.headers.get("x-real-ip");
+  const viaGateway =
+    (xff !== null && !isLoopbackForwarded(xff)) ||
+    (realIp !== null && !isLoopbackForwarded(realIp));
   return !viaGateway;
 }
 
