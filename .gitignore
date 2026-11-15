@@ -65,3 +65,9 @@ server.log
 /worklog.md
 # sandbox dev tooling
 /.zscripts/
+
+# SQLite runtime sidecar + evidencia de corrupción (no versionar)
+db/*.db-shm
+db/*.db-wal
+db/*.corrupt-*
+tool-results/

@@ -81,6 +81,28 @@ export function verifyOpsToken(provided: string, expected: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
+/**
+ * Acceso a endpoints de lectura de runs (polling EEC y consola local).
+ *
+ * Dos caminos legítimos:
+ *  1. Bearer ops-token válido (PANEL / EEC — contrato autenticado, desde cualquier red).
+ *  2. Conexión DIRECTA local sin proxy delante (consola del PC real apuntando a
+ *     127.0.0.1:3000). Caddy reescribe X-Forwarded-For con la IP real del cliente,
+ *     así que la presencia de ese header identifica de forma fiable tránsito por
+ *     gateway → exige token. Sin XFF = socket directo al servicio = consola local.
+ *
+ * Fail-closed: cualquier otra combinación → 401.
+ */
+export async function verifyRunAccess(req: Request): Promise<boolean> {
+  const header = req.headers.get("authorization") ?? "";
+  const provided = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+  if (provided.length > 0 && (await hasOpsToken()) && verifyOpsToken(provided, await getOpsToken())) {
+    return true;
+  }
+  const viaGateway = req.headers.has("x-forwarded-for") || req.headers.has("x-real-ip");
+  return !viaGateway;
+}
+
 // ───────────────────────── Durable nonce replay guard ─────────────────────────
 
 /** El registro vive en Prisma para sobrevivir reinicios y múltiples instancias. */

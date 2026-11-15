@@ -4,7 +4,7 @@
  */
 import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
-import { getOpsToken, hasOpsToken, verifyOpsToken } from "@/lib/albra/core/ops";
+import { verifyRunAccess } from "@/lib/albra/core/ops";
 import { listRuns } from "@/lib/albra/core/runs";
 import { ApiError, clampInt, errorResponse, toRunDTO } from "@/lib/albra/api-serialize";
 
@@ -13,10 +13,8 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   try {
     await ensureBootstrap();
-    const header = req.headers.get("authorization") ?? "";
-    const provided = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
-    if (!(await hasOpsToken()) || !verifyOpsToken(provided, await getOpsToken())) {
-      throw new ApiError(401, "OPS_UNAUTHORIZED", "Missing or invalid operations token", "Token de operaciones ausente o inválido.");
+    if (!(await verifyRunAccess(req))) {
+      throw new ApiError(401, "OPS_UNAUTHORIZED", "Missing or invalid operations token", "Token de operaciones ausente o inválido (o acceso remoto sin credencial).");
     }
 
     const url = new URL(req.url);

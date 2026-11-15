@@ -1,0 +1,6 @@
+531138b7371677ecdf5732bc29e5fe45dd01694aae212ce891585bedf83df53b  db/custom.db
+# BD corrupta (database disk image is malformed) detectada 2026-11-15T05:20:24Z durante integración EEC V1.
+# Archivo preservado como evidencia: db/custom.db.corrupt-20261115
+# Recuperación: regenerativa — bootstrap del INSTALADOR recrea PlatformState/bóveda/registro.
+# albra-data/keys y albra-data/packages estaban intactos (master.key + paquetes firmados).
+custom.db.corrupt-20261115 — preservado, NO restaurable (páginas dañadas, sin backups).
