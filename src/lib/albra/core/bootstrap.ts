@@ -17,6 +17,7 @@ import { getDeploymentAdapter } from "@/lib/albra/adapters";
 import { getLatestVersion } from "@/lib/albra/products/catalog";
 import { getOrCreateServiceKey } from "@/lib/albra/core/access-key";
 import { reconcileAll } from "@/lib/albra/core/process-runtime";
+import { log } from "@/lib/albra/core/logger";
 
 let bootstrapPromise: Promise<void> | null = null;
 
