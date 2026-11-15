@@ -5,7 +5,16 @@ Fecha: 2026-11-09.
 
 ## Decisión
 
-El PANEL DE CONTROL no debe añadirse todavía a `CATALOG` como producto instalable. El catálogo actual construye paquetes ALBRA con archivos de aplicación (`product.js`, manifiesto y recursos) y el contrato de despliegue existente de CRM/LEADS declara `kinds: ["local"]` con adaptador `windows-local`. El PANEL, en cambio, se entrega como una aplicación Next.js standalone en una imagen Docker, necesita un volumen persistente SQLite y requiere secretos de arranque.
+
+> **ACTUALIZADO (integración integral):** el PANEL **YA ES un producto instalable**
+> del catálogo (`panel-de-control@1.0.0`, `docker-compose`, imagen
+> `ghcr.io/albra8/panel-de-control:1.0.0` fijada por digest). Las secciones
+> siguientes se conservan como registro histórico del diseño. El flujo vigente
+> es: catálogo → INSTALL (UI o EEC) → `installContainerDeployment` → compose
+> con digests en red `albra-agents` → healthcheck de Compose. Ver
+> `docs/DEPLOYMENT-UNIFIED.md` y `docs/GITHUB-SOURCES.md`.
+
+~~El PANEL DE CONTROL no debe añadirse todavía a `CATALOG` como producto instalable.~~ (histórico — superado, ver el aviso de arriba) El catálogo actual construye paquetes ALBRA con archivos de aplicación (`product.js`, manifiesto y recursos) y el contrato de despliegue existente de CRM/LEADS declara `kinds: ["local"]` con adaptador `windows-local`. El PANEL, en cambio, se entrega como una aplicación Next.js standalone en una imagen Docker, necesita un volumen persistente SQLite y requiere secretos de arranque.
 
 Incluirlo ahora como si fuera otro proceso `product.js` produciría una entrada visible que el motor no puede desplegar correctamente.
 
