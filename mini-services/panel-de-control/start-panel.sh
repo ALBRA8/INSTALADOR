@@ -62,8 +62,9 @@ if [ ! -f .env ]; then
     echo "EEC_OPERATOR_PASSWORD=$EEC_OPERATOR_PASSWORD" >> "$OVERRIDES"; chmod 600 "$OVERRIDES"
     LOG "contraseña de operador NUEVA generada y persistida en $OVERRIDES (0600) — leerla de ahí"
   fi
-  printf 'DATABASE_URL=file:%s/db/panel.db\nALBRA_OPS_URL=http://127.0.0.1:3000\nALBRA_OPS_TOKEN=%s\nEEC_API_TOKEN=%s\nEEC_OPERATOR_PASSWORD=%s\n' \
-    "$PANEL_DIR" "$TOKEN" "$EEC_API_TOKEN" "$EEC_OPERATOR_PASSWORD" > .env
+  EEC_SESSION_SECRET="sess-$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  printf 'DATABASE_URL=file:%s/db/panel.db\nALBRA_OPS_URL=http://127.0.0.1:3000\nALBRA_OPS_TOKEN=%s\nEEC_API_TOKEN=%s\nEEC_OPERATOR_PASSWORD=%s\nEEC_SESSION_SECRET=%s\nEEC_SIMULATION_MODE=1\n' \
+    "$PANEL_DIR" "$TOKEN" "$EEC_API_TOKEN" "$EEC_OPERATOR_PASSWORD" "$EEC_SESSION_SECRET" > .env
   chmod 600 .env
   LOG ".env generado (0600). EEC_API_TOKEN disponible en .env para clientes EEC."
 fi

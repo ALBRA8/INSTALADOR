@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+db
+albra-data
+tool-results
+msi
+dev.log
+*.md
+!README.md
+tests
+docs
+mini-services
+.zscripts
+upload
+examples
+skills

@@ -638,9 +638,16 @@ const PANEL_DEPLOYMENT_SOURCE: ContainerDeploymentSource = {
   envFile: ".env.albra",
   projectName: "albra-panel",
   networkName: "albra-agents",
-  generatedSecretKeys: ["EEC_SESSION_SECRET"],
+  // Contrato ÚNICO de variables del PANEL (idéntico al compose del repo
+  // PANEL-DE-CONTROL y a deploy/docker-entrypoint.sh):
+  //  - EEC_OPERATOR_PASSWORD / EEC_SESSION_SECRET / EEC_API_TOKEN: seguridad
+  //    propia del PANEL (login operador, sesiones HMAC, Bearer de servicio).
+  //  - ALBRA_OPS_URL + ALBRA_OPS_TOKEN: puente real al INSTALADOR (POST /api/ops).
+  //  - EEC_SIMULATION_MODE=0: producción arranca en ejecución REAL.
+  generatedSecretKeys: ["EEC_SESSION_SECRET", "EEC_API_TOKEN", "EEC_OPERATOR_PASSWORD"],
   envStatic: {
     ALBRA_OPS_URL: "http://host.docker.internal:3000",
+    EEC_SIMULATION_MODE: "0",
   },
   envFromPlatformSecret: [
     { envVar: "ALBRA_OPS_TOKEN", secretKey: "eec.ops.token" },

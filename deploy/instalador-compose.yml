@@ -1,0 +1,38 @@
+# ALBRA INSTALADOR — despliegue unificado (controla el Docker del host).
+#
+# El socket de Docker se monta para que el INSTALADOR (motor compose real,
+# digests pinneados) despliegue PANEL y agentes. Datos persistentes en
+# volúmenes nombrados: bd del INSTALADOR y ALBRA_HOME (bóveda, claves, registro).
+#
+#   docker compose -f deploy/instalador-compose.yml build
+#   bash deploy/unified-up.sh
+name: albra-platform
+
+services:
+  core:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: albra/instalador:local
+    container_name: albra-core
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: file:/app/db/custom.db
+      ALBRA_HOME: /app/albra-data
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - instalador-db:/app/db
+      - instalador-albra-data:/app/albra-data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/system"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  instalador-db:
+  instalador-albra-data:
