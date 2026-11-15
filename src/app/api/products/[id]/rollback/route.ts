@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { getInstalled } from "@/lib/albra/core/registry";
+import { isContainerized, rollbackContainerDeployment } from "@/lib/albra/core/container-routes";
 import { rollbackLastUpdate } from "@/lib/albra/core/updater";
 import { ApiError, errorResponse } from "@/lib/albra/api-serialize";
 
@@ -26,6 +27,11 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       );
     }
 
+    // F2/F5: contenedorizado → rollback real de Compose (previousVersion).
+    if (await isContainerized(id)) {
+      const r = await rollbackContainerDeployment(id);
+      return NextResponse.json({ runId: r.runId, containerized: true, restoredVersion: r.restoredVersion });
+    }
     const { runId } = await rollbackLastUpdate(id);
     return NextResponse.json({ runId });
   } catch (e) {

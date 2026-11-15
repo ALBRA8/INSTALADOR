@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { requireInstalled } from "@/lib/albra/core/registry";
+import { isContainerized, containerHealth } from "@/lib/albra/core/container-routes";
 import { latestHealth, runHealthChecks } from "@/lib/albra/core/health";
 import { ApiError, asArray, errorResponse, iso } from "@/lib/albra/api-serialize";
 import type { HealthCheckDTO } from "@/lib/albra/api-types";
@@ -50,6 +51,12 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     const { id } = await params;
 
     await requireInstalled(id);
+    // F2/F5: contenedorizado → salud real de Compose por servicio (persistida
+    // como snapshot para el GET). Locales → Health Contract del proceso.
+    if (await isContainerized(id)) {
+      const result = await containerHealth(id);
+      return NextResponse.json({ overall: result.overall, checks: result.checks });
+    }
     const result = await runHealthChecks(id);
     return NextResponse.json({ overall: result.overall, checks: result.checks });
   } catch (e) {

@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { requireInstalled } from "@/lib/albra/core/registry";
 import { collectDiagnostics } from "@/lib/albra/core/diagnostics";
+import { isContainerized } from "@/lib/albra/core/container-routes";
 import { db } from "@/lib/db";
 import { ApiError, errorResponse, iso } from "@/lib/albra/api-serialize";
 import type { DiagnosticsDTO } from "@/lib/albra/api-types";
@@ -21,6 +22,25 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
     await requireInstalled(id);
     const bundle = await collectDiagnostics(id);
+
+    // F2/F5: evidencia del despliegue contenedorizado cuando aplica.
+    let container: Record<string, unknown> | undefined;
+    if (await isContainerized(id)) {
+      const dep = await db.containerDeployment.findUnique({ where: { productId: id } });
+      if (dep) {
+        container = {
+          projectName: dep.projectName,
+          networkName: dep.networkName,
+          imageDigests: dep.imageDigests,
+          previousVersion: dep.previousVersion,
+          desiredState: dep.desiredState,
+          observedState: dep.observedState,
+          health: dep.health,
+          lastError: dep.lastError,
+          lastObservedAt: dep.lastObservedAt ? iso(dep.lastObservedAt) : null,
+        };
+      }
+    }
 
     const dto: DiagnosticsDTO = {
       productId: bundle.productId,
@@ -47,7 +67,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
         })),
       })),
     };
-    return NextResponse.json(dto);
+    return NextResponse.json({ ...dto, ...(container ? { container } : {}) });
   } catch (e) {
     return errorResponse(e);
   }

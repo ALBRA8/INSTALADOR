@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { getInstalled } from "@/lib/albra/core/registry";
+import { isContainerized, containerUninstallRun } from "@/lib/albra/core/container-routes";
 import { runUninstall } from "@/lib/albra/core/uninstaller";
 import { ApiError, errorResponse, readJson } from "@/lib/albra/api-serialize";
 import type { DataMode } from "@/lib/albra/contracts";
@@ -40,6 +41,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       );
     }
 
+    // F2/F5: contenedorizado → compose down + purge opcional de volúmenes,
+    // envuelto en un Run observable (mismo motor que el contrato EEC).
+    if (await isContainerized(id)) {
+      const containerized = await containerUninstallRun(id, dataMode as DataMode);
+      return NextResponse.json({ runId: containerized.runId, containerized: true });
+    }
     const result = await runUninstall(id, dataMode as DataMode);
     return NextResponse.json({
       runId: result.runId,

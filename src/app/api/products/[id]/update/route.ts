@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { getInstalled } from "@/lib/albra/core/registry";
+import { isContainerized, updateContainerDeployment } from "@/lib/albra/core/container-routes";
 import { runUpdate, type InjectFailure } from "@/lib/albra/core/updater";
 import { ApiError, errorResponse, readJson } from "@/lib/albra/api-serialize";
 
@@ -46,6 +47,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
 
     const accessKey = typeof body?.accessKey === "string" ? body.accessKey : "";
+
+    // F2/F5: contenedorizado → UPDATE REAL por digest (compose pull + up -d).
+    // injectFailure no aplica: es un hook del updater local.
+    if (await isContainerized(id)) {
+      const r = await updateContainerDeployment(id, targetVersion.trim(), { accessKey });
+      return NextResponse.json({ runId: r.runId, containerized: true, fromVersion: r.fromVersion, toVersion: r.toVersion });
+    }
     const { runId } = await runUpdate(id, targetVersion.trim(), injectFailure, 200, { accessKey });
     return NextResponse.json({ runId });
   } catch (e) {

@@ -87,6 +87,10 @@ model ContainerDeployment {
   envFile            String
   networkName        String   @default("albra-agents")
   imageDigests       Json
+  // Versión instalada inmediatamente antes del último UPDATE contenedorizado
+  // (null = no hay rollback de contenedor disponible). La escribe
+  // updateContainerDeployment y la consume rollbackContainerDeployment.
+  previousVersion    String?
   desiredState       String   @default("STOPPED") // RUNNING | STOPPED
   observedState      String   @default("UNKNOWN") // RUNNING | STOPPED | DEGRADED | UNKNOWN
   health             String   @default("UNKNOWN") // HEALTHY | DEGRADED | FAILED | UNKNOWN

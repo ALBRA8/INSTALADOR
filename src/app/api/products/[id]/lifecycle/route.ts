@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { ensureBootstrap } from "@/lib/albra/core/bootstrap";
 import { requireInstalled } from "@/lib/albra/core/registry";
+import { isContainerized, containerLifecycle } from "@/lib/albra/core/container-routes";
 import { restartProduct, startProduct, stopProduct } from "@/lib/albra/core/runtime";
 import { ApiError, errorResponse, readJson } from "@/lib/albra/api-serialize";
 
@@ -39,6 +40,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     await requireInstalled(id);
 
     let res: LifecycleResult;
+    // F2/F5: producto contenedorizado → ciclo de vida REAL de Compose
+    // (mismos motores que el contrato EEC). Locales → proceso del SO.
+    if (await isContainerized(id)) {
+      const c = await containerLifecycle(id, action);
+      if (!c.ok) {
+        throw new ApiError(400, c.error ?? "LIFECYCLE_ERROR", `Lifecycle ${action} failed: ${c.error}`, USER_MESSAGES[c.error ?? ""] ?? `No se pudo completar la operación (${c.error}).`);
+      }
+      return NextResponse.json({ ok: true, containerized: true, detail: c.detail });
+    }
     if (action === "START") {
       res = await startProduct(id);
     } else if (action === "STOP") {

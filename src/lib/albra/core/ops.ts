@@ -25,6 +25,11 @@ import { getOrCreateServiceKey } from "@/lib/albra/core/access-key";
 import { getContainerDeployment } from "@/lib/albra/core/registry";
 import { runContainerLifecycle } from "@/lib/albra/core/container-lifecycle";
 import { uninstallContainerDeployment } from "@/lib/albra/core/container-deploy";
+import {
+  isContainerized,
+  updateContainerDeployment,
+  rollbackContainerDeployment,
+} from "@/lib/albra/core/container-routes";
 import { createBackup, restoreBackup } from "@/lib/albra/core/backup";
 import { collectDiagnostics } from "@/lib/albra/core/diagnostics";
 import { getLatestVersion } from "@/lib/albra/products/catalog";
@@ -308,11 +313,22 @@ export async function executeOps(raw: unknown, actor = "EEC"): Promise<EecOpsRes
         if (!targetVersion) {
           return reject("OPERATION_FAILED", `No hay versión destino disponible para ${request.productId}; indica params.targetVersion`);
         }
+        // F2/F5: contenedorizado → UPDATE real por digest (mismo motor que la UI).
+        if (await isContainerized(request.productId)) {
+          const r = await updateContainerDeployment(request.productId, targetVersion, { accessKey: await getOrCreateServiceKey() });
+          result = { runId: r.runId, detail: { targetVersion, fromVersion: r.fromVersion, toVersion: r.toVersion } };
+          break;
+        }
         const { runId } = await runUpdate(request.productId, targetVersion, null, 200, { accessKey: await getOrCreateServiceKey() });
         result = { runId, detail: { targetVersion } };
         break;
       }
       case "ROLLBACK": {
+        if (await isContainerized(request.productId)) {
+          const r = await rollbackContainerDeployment(request.productId);
+          result = { runId: r.runId, detail: { restoredVersion: r.restoredVersion } };
+          break;
+        }
         const { runId } = await rollbackLastUpdate(request.productId);
         result = { runId };
         break;
